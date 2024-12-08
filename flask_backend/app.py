@@ -7,126 +7,123 @@ import random
 import json
 import time
 import threading
-
+import math
+from simul import *
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 socketio = SocketIO(app, cors_allowed_origins="*")  # Enable CORS for SocketIO
 
 # Load the layout data
-with open('fab_oht_layout.json') as f:
+with open('fab_oht_layout_2nd.json') as f:
     layout_data = json.load(f)
-
-# Create the network graph
-network = nx.DiGraph()
-for node in layout_data['nodes']:
-    network.add_node(node['id'], pos=(node['x'], node['y']))
-
-for rail in layout_data['rails']:
-    network.add_edge(rail['from'], rail['to'], length=1, speed=0.01, count=0)  # Simplified length and speed
-    
-simulation_running = False
-simulation_thread = None
-stop_simulation_event = threading.Event()
-simulation_env = None
-
 
 @app.route('/layout')
 def layout():
     return jsonify(layout_data)
 
-@socketio.on('connect')
-def handle_connect():
-    print('Client connected')
+nodes = [node(n['id'], [n['x'], n['y']]) for n in layout_data['nodes']]
+edges = [
+    edge(
+        source=next(node for node in nodes if node.id == rail['from']),
+        dest=next(node for node in nodes if node.id == rail['to']),
+        length=math.sqrt(
+            (next(node for node in nodes if node.id == rail['to']).coord[0] -
+             next(node for node in nodes if node.id == rail['from']).coord[0])**2 +
+            (next(node for node in nodes if node.id == rail['to']).coord[1] -
+             next(node for node in nodes if node.id == rail['from']).coord[1])**2
+        ),
+        max_speed=1500  # Default speed = 0.01
+    )
+    for rail in layout_data['rails']
+]
 
-@socketio.on('disconnect')
-def handle_disconnect():
-    print('Client disconnected')
-    
+ports = [
+    port(
+        name = p['name'], 
+        from_node = next((node for node in nodes if node.id == p['from_node'])),
+        to_node = next((node for node in nodes if node.id == p['to_node'])),
+        from_dist = p['distance']
+    )
+    for p in layout_data['ports']
+]
 
-def oht_process(env, name, network, start, end, link_resources):
-    try:
-        path = nx.dijkstra_path(network, start, end, weight='length')
-    except nx.NetworkXNoPath:
-        return
+# Initialize AMHS
 
-    for i in range(len(path) - 1):
-        if stop_simulation_event.is_set():
-            return  # Stop the process if the simulation is not running
-        source, dest = path[i], path[i + 1]
-        edge_data = network.get_edge_data(source, dest)
-        link_resource = link_resources[(source, dest)]['resource']
+simulation_running = False
+stop_simulation_event = threading.Event()
 
-        with link_resource.request() as req:
-            yield req
-            network[source][dest]['count'] += 1
-            travel_time = edge_data['length'] / edge_data['speed']
 
-            # Send updates during the travel
-            for progress in range(1, 11):
-                if stop_simulation_event.is_set():
-                    return  # Stop the process if the simulation is stopped
-                position = (
-                    network.nodes[source]['pos'][0] + (network.nodes[dest]['pos'][0] - network.nodes[source]['pos'][0]) * (progress / 10),
-                    network.nodes[source]['pos'][1] + (network.nodes[dest]['pos'][1] - network.nodes[source]['pos'][1]) * (progress / 10)
-                )
-                socketio.emit('updateOHT', {'id': name, 'x': position[0], 'y': position[1], 'time': env.now})
-                # time.sleep(0.01)
-                yield env.timeout(travel_time / 10)
-
-        position = network.nodes[dest]['pos']
-        socketio.emit('updateOHT', {'id': name, 'x': position[0], 'y': position[1], 'time': env.now})
-        
-
-# def run_simulation_test():
-#         # Send updates during the travel
-#     name='test_oht'
-#     for progress in range(1, 10):
-#         sim_time = progress
-#         position = (
-#             500*progress,
-#             1000*progress
-#         )
-#         socketio.emit('updateOHT', {'id': name, 'x': position[0], 'y': position[1], 'time': sim_time})
-#         time.sleep(1)
-    
 def run_simulation():
-    global simulation_running, stop_simulation_event, simulation_env
-    simulation_running = True  # Set the simulation as running
-    stop_simulation_event.clear()  # Clear the stop event
-    env = simpy.Environment()
-    link_resources = {}
-    for rail in layout_data['rails']:
-        link_resources[(rail['from'], rail['to'])] = {'resource': simpy.Resource(env, capacity=1)}
     
-    nodes = list(network.nodes)
-    num_ohts = 500  # Number of OHTs
-    oht_names = [f'oht_{i+1}' for i in range(num_ohts)]
+    amhs = AMHS(nodes=nodes, edges=edges, ports=ports, num_OHTs=500, max_jobs=1000)
 
-    for name in oht_names:
-        start = random.choice(nodes)
-        end = random.choice(nodes)
-        while end == start:
-            end = random.choice(nodes)
-        env.process(oht_process(env, name, network, start, end, link_resources))
+    """Runs the simulation using AMHS."""
+    global simulation_running
+    simulation_running = True
+    stop_simulation_event.clear()
 
-    env.run(until=1000)  # Run the simulation for 100 time units
-    if simulation_running and not stop_simulation_event.is_set():
-        socketio.emit('simulationComplete')  # Emit event when simulation is complete
-    simulation_running = False  # Reset the simulation status
+    time_step = 0.1
+    max_time = 4000
+    current_time = 0
+
+    while current_time < max_time:
+        if stop_simulation_event.is_set():
+            break
+
+        amhs.generate_job()
+
+        # 작업 할당
+        amhs.assign_jobs()
+        
+        mismatched_oht = []
+
+        # Move all OHTs
+        oht_positions = []
+        for oht in amhs.OHTs:
+            oht.move(time_step)
+        
+        for oht in amhs.OHTs:
+            oht_positions.append({
+                'id': oht.id,  # Unique identifier
+                'x': oht.pos[0],
+                'y': oht.pos[1],
+                'source': oht.edge.source.id if oht.edge else None,  # Source node of the current edge
+                'dest': oht.edge.dest.id if oht.edge else None   
+            })
+                
+                # print(oht_positions)
+
+        # Emit the current time and OHT positions
+        socketio.emit('updateOHT', {
+            'time': current_time,
+            'oht_positions': oht_positions
+        })
+
+        # Increment time
+        current_time += time_step
+
+        # Sleep for a real-time effect
+        socketio.sleep(0.001)
+
+    simulation_running = False
+    
+    print('simulation ended')
+
 
 @socketio.on('startSimulation')
 def start_simulation():
     socketio.start_background_task(run_simulation)
     
+    
 @socketio.on('stopSimulation')
 def stop_simulation():
-    global simulation_running, simulation_env
+    global simulation_running
     simulation_running = False  # Set the simulation as stopped
     stop_simulation_event.set()  # Signal all running processes to stop
-    if simulation_env:
-        simulation_env.exit()  # Exit the simulation environment
     socketio.emit('simulationStopped')  # Notify the frontend that the simulation has stopped
+    
+    
     
 if __name__ == '__main__':
     socketio.run(app, port=5001, debug=True)
