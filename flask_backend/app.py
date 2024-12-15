@@ -2,7 +2,6 @@ from flask import Flask, jsonify
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
 import networkx as nx
-import simpy
 import random
 import json
 import time
@@ -11,17 +10,21 @@ import math
 from simul import *
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
-socketio = SocketIO(app, cors_allowed_origins="*")  # Enable CORS for SocketIO
+
+CORS(app)  # Enable CORS for all routes <- next.js WEb이랑 flask backend CORS 위해서 해놓는것
+
+socketio = SocketIO(app, cors_allowed_origins="*")  # Enable CORS for SocketIO, 웹소켓선언
 
 # Load the layout data
 with open('fab_oht_layout_2nd.json') as f:
     layout_data = json.load(f)
 
+#레이아웃 데이터 전달
 @app.route('/layout')
 def layout():
     return jsonify(layout_data)
 
+#nodes, edges, ports 객체 생성하기
 nodes = [node(n['id'], [n['x'], n['y']]) for n in layout_data['nodes']]
 edges = [
     edge(
@@ -49,28 +52,33 @@ ports = [
 ]
 
 # Initialize AMHS
-
+# 시뮬레이션 돌아갈 때 중간에 스탑할 수 있도록 필요한 것 !
 simulation_running = False
 stop_simulation_event = threading.Event()
 
-
+#시뮬레이션 돌리기
 def run_simulation():
     
+    #AMHS 객체 생성
     amhs = AMHS(nodes=nodes, edges=edges, ports=ports, num_OHTs=500, max_jobs=1000)
 
-    """Runs the simulation using AMHS."""
+    """Runs the simulation using AMHS. <- 이것도 중간에 멈추기 위해서 필요함"""
     global simulation_running
     simulation_running = True
     stop_simulation_event.clear()
 
+    #time_step / max_time 설정
     time_step = 0.1
     max_time = 4000
     current_time = 0
-
+    
+    #시뮬레이션 돌리기 
     while current_time < max_time:
+        #stop되면 중간에 멈추게
         if stop_simulation_event.is_set():
             break
-
+        
+        #작업 생성
         amhs.generate_job()
 
         # 작업 할당
@@ -94,7 +102,7 @@ def run_simulation():
                 
                 # print(oht_positions)
 
-        # Emit the current time and OHT positions
+        # Emit the current time and OHT positions, OHT 위치를 매 타임스텝마다 프론트쪽으로 보내기
         socketio.emit('updateOHT', {
             'time': current_time,
             'oht_positions': oht_positions
@@ -104,7 +112,7 @@ def run_simulation():
         current_time += time_step
 
         # Sleep for a real-time effect
-        socketio.sleep(0.001)
+        socketio.sleep(0.01)
 
     simulation_running = False
     
