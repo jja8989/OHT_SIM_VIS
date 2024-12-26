@@ -2,6 +2,7 @@ from flask import Flask, jsonify
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
 import networkx as nx
+import simpy
 import random
 import json
 import time
@@ -10,21 +11,17 @@ import math
 from simul import *
 
 app = Flask(__name__)
-
-CORS(app)  # Enable CORS for all routes <- next.js WEb이랑 flask backend CORS 위해서 해놓는것
-
-socketio = SocketIO(app, cors_allowed_origins="*")  # Enable CORS for SocketIO, 웹소켓선언
+CORS(app)  # Enable CORS for all routes
+socketio = SocketIO(app, cors_allowed_origins="*")  # Enable CORS for SocketIO
 
 # Load the layout data
 with open('fab_oht_layout_2nd.json') as f:
     layout_data = json.load(f)
 
-#레이아웃 데이터 전달
 @app.route('/layout')
 def layout():
     return jsonify(layout_data)
 
-#nodes, edges, ports 객체 생성하기
 nodes = [node(n['id'], [n['x'], n['y']]) for n in layout_data['nodes']]
 edges = [
     edge(
@@ -52,67 +49,76 @@ ports = [
 ]
 
 # Initialize AMHS
-# 시뮬레이션 돌아갈 때 중간에 스탑할 수 있도록 필요한 것 !
+
+global amhs
 simulation_running = False
 stop_simulation_event = threading.Event()
 
-#시뮬레이션 돌리기
+
 def run_simulation():
     
-    #AMHS 객체 생성
+    global amhs
     amhs = AMHS(nodes=nodes, edges=edges, ports=ports, num_OHTs=500, max_jobs=1000)
 
-    """Runs the simulation using AMHS. <- 이것도 중간에 멈추기 위해서 필요함"""
+    """Runs the simulation using AMHS."""
     global simulation_running
     simulation_running = True
     stop_simulation_event.clear()
 
-    #time_step / max_time 설정
-    time_step = 0.1
+    time_step = 0.01
     max_time = 4000
     current_time = 0
-    
-    #시뮬레이션 돌리기 
+    count = 0
+    # pdb.set_trace()
+
     while current_time < max_time:
-        #stop되면 중간에 멈추게
         if stop_simulation_event.is_set():
             break
-        
-        #작업 생성
+
         amhs.generate_job()
 
         # 작업 할당
         amhs.assign_jobs()
-        
-        mismatched_oht = []
 
         # Move all OHTs
         oht_positions = []
         for oht in amhs.OHTs:
             oht.move(time_step)
         
-        for oht in amhs.OHTs:
-            oht_positions.append({
-                'id': oht.id,  # Unique identifier
-                'x': oht.pos[0],
-                'y': oht.pos[1],
-                'source': oht.edge.source.id if oht.edge else None,  # Source node of the current edge
-                'dest': oht.edge.dest.id if oht.edge else None   
-            })
-                
-                # print(oht_positions)
+        if count%10==0:
+            for oht in amhs.OHTs:
+                oht_positions.append({
+                    'id': oht.id,  # Unique identifier
+                    'x': oht.pos[0],
+                    'y': oht.pos[1],
+                    
+                    'source': oht.edge.source.id if oht.edge else None,  # Source node of the current edge
+                    'dest': oht.edge.dest.id if oht.edge else None,
+                    
+                    'speed': oht.speed,                                 # Current speed of the OHT
+                    'status': oht.status,                               # Current status (e.g., IDLE, TO_START, TO_END)
+                    'startPort': oht.start_port.name if oht.start_port else None,  # Start port name
+                    'endPort': oht.end_port.name if oht.end_port else None,
+                    
+                    'from_node' : oht.from_node.id if oht.from_node else None,# End port name
+                    'from_dist': oht.from_dist,
+                    'wait_time': oht.wait_time
+                })
+                    
+                    # print(oht_positions)
 
-        # Emit the current time and OHT positions, OHT 위치를 매 타임스텝마다 프론트쪽으로 보내기
-        socketio.emit('updateOHT', {
-            'time': current_time,
-            'oht_positions': oht_positions
-        })
+            # Emit the current time and OHT positions
+            socketio.emit('updateOHT', {
+                'time': current_time,
+                'oht_positions': oht_positions
+            })
 
         # Increment time
         current_time += time_step
+        count += 1
 
         # Sleep for a real-time effect
-        socketio.sleep(0.01)
+        socketio.sleep(0.0001)
 
     simulation_running = False
     
@@ -130,6 +136,105 @@ def stop_simulation():
     simulation_running = False  # Set the simulation as stopped
     stop_simulation_event.set()  # Signal all running processes to stop
     socketio.emit('simulationStopped')  # Notify the frontend that the simulation has stopped
+
+@socketio.on('removeRail')
+def handle_rail_update(data):    
+    global amhs
+    global simulation_running
+
+    removed_rail_key = data['removedRailKey']
+    oht_positions = data['ohtPositions']
+    is_removed = data['isRemoved']
+    current_time = data['currentTime']  # currentTime 추가
+    
+    print(oht_positions)
+    
+    
+    print('removeRail')
+
+    
+    simulation_running = False
+    stop_simulation_event.set()
+    
+    socketio.emit('simulationStopped') 
+
+    # Remove the specified rail from the simulation graph
+    source, dest = removed_rail_key.split('-')
+    amhs.modi_edge(source, dest, oht_positions, is_removed)
+    amhs.reinitialize_simul(oht_positions)
+    
+    socketio.start_background_task(restart_simulation, amhs, current_time)
+
+    
+    # print(removed_rail_key)
+    # print(oht_positions)
+    
+def restart_simulation(amhs, current_time, max_time=4000, time_step=0.01):
+    """
+    Restart the simulation from the given current_time using the existing AMHS object.
+
+    Parameters:
+        amhs (AMHS): The current AMHS object to be used for the simulation.
+        current_time (float): The time to restart the simulation from.
+        max_time (float): The maximum time for the simulation to run. Default is 4000.
+        time_step (float): The time step for the simulation loop. Default is 0.01.
+
+    Returns:
+        None
+    """
+    global simulation_running
+    simulation_running = True
+    stop_simulation_event.clear()
+
+    count = 0  # Counter to manage the frequency of OHT position updates
+
+    while current_time < max_time:
+        if stop_simulation_event.is_set():
+            break
+
+        amhs.generate_job()
+
+        # Assign jobs to OHTs
+        amhs.assign_jobs()
+
+        # Move all OHTs
+        oht_positions = []
+        for oht in amhs.OHTs:
+            oht.move(time_step)
+
+        if count % 10 == 0:  # Emit OHT positions at every 10th iteration
+            for oht in amhs.OHTs:
+                oht_positions.append({
+                    'id': oht.id,
+                    'x': oht.pos[0],
+                    'y': oht.pos[1],
+                    'source': oht.edge.source.id if oht.edge else None,
+                    'dest': oht.edge.dest.id if oht.edge else None,
+                    'speed': oht.speed,
+                    'status': oht.status,
+                    'startPort': oht.start_port.name if oht.start_port else None,
+                    'endPort': oht.end_port.name if oht.end_port else None,
+                    'from_node': oht.from_node.id if oht.from_node else None,
+                    'from_dist': oht.from_dist,
+                    'wait_time': oht.wait_time
+                })
+
+            # Emit the current time and OHT positions
+            socketio.emit('updateOHT', {
+                'time': current_time,
+                'oht_positions': oht_positions
+            })
+
+        # Increment time
+        current_time += time_step
+        count += 1
+
+        # Sleep for a real-time effect
+        socketio.sleep(0.0001)
+
+    simulation_running = False
+
+    print('Simulation restarted and ended.')
     
     
     

@@ -59,6 +59,9 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     const ohtQueues = useRef<Map<string, OHT[]>>(new Map()); // Use ohtQueues to track last positions
     const processingQueues = useRef<Map<string, boolean>>(new Map());
     const railsRef = useRef<Rail[]>(data.rails); // Maintain a reference to the rails
+    const [selectedRail, setSelectedRail] = useState<{ rail: Rail; x: number; y: number } | null>(null);
+    const isVisualizationStarted = useRef(false);
+
 
 
     useEffect(() => {
@@ -133,7 +136,19 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             .attr('stroke-width', 2.5)
             .attr('stroke', d => colorScale(d.count)) // Set initial stroke color
             .on('mouseover', (event, d) => showTooltip(event, objectToString(d)))
-            .on('mouseout', hideTooltip);
+            .on('mouseout', hideTooltip)
+            .on('click', (event, d) => {
+                event.stopPropagation();
+                const fromNode = nodes.find(n => n.id === d.from);
+                const toNode = nodes.find(n => n.id === d.to);
+                if (fromNode && toNode) {
+                    const midpoint = {
+                        x: (scalePosition(fromNode).x + scalePosition(toNode).x) / 2,
+                        y: (scalePosition(fromNode).y + scalePosition(toNode).y) / 2,
+                    };
+                    setSelectedRail({ rail: d, ...midpoint });
+                }
+            });
 
         // Draw nodes
         g.selectAll('.node')
@@ -187,8 +202,13 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                         .attr('class', 'oht')
                         .attr('cx', yScale(updatedOHT.x))
                         .attr('cy', yScale(updatedOHT.y))
-                        .attr('r', 2)
+                        .attr('r', 1)
                         .attr('fill', 'orange');
+
+                    if (!isVisualizationStarted.current) {
+                        isVisualizationStarted.current = true;
+                        console.log('Visualization started.');
+                    }
                 }                
         
                 const lastKnownOHT = ohtQueues.current.get(updatedOHT.id)?.[0];
@@ -214,17 +234,27 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                             requestAnimationFrame(() => processQueue(ohtId)); // Process the next position
                         } else {
                             processingQueues.current.set(ohtId, false);
-                            checkSimulationComplete();
+        
+                            // // Only call checkSimulationComplete if all animations and visualizations are done
+                            if (Array.from(processingQueues.current.values()).every((processing) => !processing) && updatedOHT.time > 0) {
+                                checkSimulationComplete();
+                                console.log('1')
+                            }
                         }
                     });
             } else {
                 processingQueues.current.set(ohtId, false);
-                checkSimulationComplete();
+                // if (Array.from(processingQueues.current.values()).every((processing) => !processing)) {
+                //     checkSimulationComplete();
+                //     console.log('2')
+                // }
             }
         };
         
         
         const handleOHTUpdate = (data: { time: number; oht_positions: OHT[] }) => {
+
+            const time = data.time;
             data.oht_positions.forEach((updatedOHT) => {
                 if (!ohtQueues.current.has(updatedOHT.id)) {
                     ohtQueues.current.set(updatedOHT.id, []);
@@ -232,7 +262,8 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         
                 // Add new position data to the queue for the OHT
                 const queue = ohtQueues.current.get(updatedOHT.id)!;
-                queue.push(updatedOHT);
+                // queue.push(updatedOHT);
+                queue.push({ ...updatedOHT, time });
         
                 // Start processing if not already in progress
                 if (!processingQueues.current.get(updatedOHT.id)) {
@@ -241,19 +272,25 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                 }
             });
 
-            checkSimulationComplete();
+            // if (Array.from(processingQueues.current.values()).every((processing) => !processing) && time > 0) {
+            //     console.log('3')
+            //     checkSimulationComplete();
+            // }
         };
 
         const checkSimulationComplete = () => {
             // 모든 OHT 큐가 비어 있는지 확인
             const allQueuesEmpty = Array.from(ohtQueues.current.values()).every(queue => queue.length === 0);
+
+            const visualizedOHTs = d3.selectAll('.oht').size();
         
-            if (allQueuesEmpty) {
+            if (allQueuesEmpty && visualizedOHTs != 0 && isVisualizationStarted.current ) {
                 console.log('Simulation complete: All OHT queues are empty.');
                 setIsRunning(false); // 시뮬레이션 상태를 멈춤으로 변경
                 socket.emit('simulationStopped'); // 백엔드에 시뮬레이션 완료 알림
             }
         };
+
         
         socket.on('updateOHT', handleOHTUpdate);
 
@@ -262,6 +299,73 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         };
 
     }, [data]);  // Remove railCounts from dependencies
+
+    const removeRail = () => {
+        if (selectedRail) {
+            // Update rail color to gray
+            d3.selectAll('.rail')
+                .filter(d => d === selectedRail.rail)
+                .attr('stroke', 'gray');
+
+            // Notify backend
+            // socket.emit('removeRail', { railKey: `${selectedRail.rail.from}-${selectedRail.rail.to}` });
+            const removedRailKey =  `${selectedRail.rail.from}-${selectedRail.rail.to}`;
+
+            const currentOHTPositions = Array.from(ohtQueues.current.entries()).map(([id, queue]) => queue[0]);
+            const currentTime = currentOHTPositions.length > 0 ? currentOHTPositions[0].time : 0; 
+
+            // socket.emit('stopSimulation');
+
+            socket.disconnect();
+            socket.connect();    
+
+            ohtQueues.current.clear();
+            processingQueues.current.clear();
+
+            // socket.emit('removeRail', {
+            //     removedRailKey,
+            //     ohtPositions: currentOHTPositions,
+            //     currentTime,
+            //     isRemoved : true
+            // })
+
+            socket.emit('stopSimulation');
+
+            socket.off('simulationStopped');
+
+
+            socket.on('simulationStopped', () => {
+                console.log('Simulation stopped confirmed by backend.');
+            
+                // Notify backend of the removed rail and current OHT positions
+                socket.emit('removeRail', {
+                    removedRailKey,
+                    ohtPositions: currentOHTPositions,
+                    currentTime,
+                    isRemoved: true,
+                });
+                setIsRunning(true);
+                socket.off('simulationStopped');
+
+            });
+
+            // socket.on('simulationStopped', () => {
+            //     console.log('Simulation stopped confirmed by backend.');
+        
+            //     // Notify backend of the removed rail and current OHT positions
+            //     socket.emit('removeRail', {
+            //         removedRailKey,
+            //         ohtPositions: currentOHTPositions,
+            //         currentTime,
+            //         is_removed : true
+            //     })
+            // });
+    
+            // Clear selected rail
+            setSelectedRail(null);
+            setIsRunning(true);
+        }
+    };
 
     const startSimulation = () => {
         resetSimulation(); // Reset the state before starting
@@ -286,7 +390,18 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         // Clear OHT queues and processing states
         ohtQueues.current.clear();
         processingQueues.current.clear();
-    
+
+        socket.disconnect();
+        socket.connect();
+
+        d3.selectAll('.rail')
+        .each(function (d: Rail) {
+            d.count = 0; // Reset count directly on the data
+        })
+        .attr('stroke', d => colorScale(d.count)); // Reset color to default
+
+        d3.selectAll('.oht').remove();
+
         console.log('Simulation reset complete');
     };
     
@@ -295,24 +410,33 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         setIsRunning(false);
     
         // Disconnect and reconnect socket to clear data
-        socket.disconnect();
-        socket.connect();
+        // socket.disconnect();
+        // socket.connect();
     
-        resetSimulation(); // Clear SVG elements and data
+        // resetSimulation(); // Clear SVG elements and data
         socket.emit('stopSimulation');
     };
 
-    // useEffect(() => {
-    //     // Handle simulation stopped event
-    //     socket.on('simulationStopped', () => {
-    //         console.log('Simulation stopped confirmed by backend.');
-    //         resetSimulation(); // Perform reset after backend confirms stop
-    //     });
+    const computeButtonPosition = (x: number, y: number) => {
+        const svgElement = svgRef.current;
+        if (!svgElement) return { left: 0, top: 0 };
     
-    //     return () => {
-    //         socket.off('simulationStopped');
-    //     };
-    // }, []);
+        // Get the bounding box of the SVG element
+        const svgRect = svgElement.getBoundingClientRect();
+    
+        // Apply zoom and pan transformations
+        const transform = zoomTransformRef.current;
+    
+        // Transform SVG coordinates to screen coordinates
+        const transformedX = transform.x + x * transform.k;
+        const transformedY = transform.y + y * transform.k;
+    
+        // Add the offset of the SVG element's position on the page
+        return {
+            left: svgRect.left + transformedX,
+            top: svgRect.top + transformedY,
+        };
+    };
     
 
     const zoomIn = () => {
@@ -326,7 +450,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     };
 
     return (
-        <div className="flex flex-col h-screen">
+        <div className="flex flex-col h-screen" onClick={() => setSelectedRail(null)}>
             <header className="flex justify-between items-center p-4 bg-gray-800 text-white">
                 <h1>OHT Railway Simulation</h1>
                 <div className="flex gap-2">
@@ -335,11 +459,36 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                 </div>
             </header>
             <main className="flex-grow">
-                <div className="w-full h-full">
-                    <svg ref={svgRef} id="oht-visualization" className="w-full h-full">
+                <div className="w-full h-full"
+                    onClick={(e) => { // SVG 내부 클릭 시 유지
+                        setSelectedRail(null); // 다른 곳 클릭 시 초기화
+                    }}>
+                    <svg ref={svgRef} id="oht-visualization" className="w-full h-full" onClick={(e) => setSelectedRail(null)}>
                         <g ref={gRef}></g>
                     </svg>
                     <div id="tooltip" className="tooltip" style={{ position: 'absolute', visibility: 'hidden', background: '#fff', border: '1px solid #ccc', padding: '5px', borderRadius: '5px', pointerEvents: 'none', fontSize: '10px' }}></div>
+                    {selectedRail && (
+                        <button
+                            style={{
+                                position: 'absolute',
+                                ...computeButtonPosition(selectedRail.x, selectedRail.y),
+                                transform: 'translate(20%, 0%)',
+                                background: 'red',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '5px',
+                                padding: '5px 10px',
+                                cursor: 'pointer',
+                                zIndex: 10,
+                            }}
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                removeRail();
+                            }}
+                        >
+                            Remove Rail
+                        </button>
+                    )}
                 </div>
             </main>
             <footer className="flex justify-between items-center p-4 bg-gray-800 text-white">
