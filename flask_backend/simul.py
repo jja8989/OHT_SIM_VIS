@@ -118,47 +118,62 @@ class OHT():
         #여기는 디버깅 위한 구간이라서 무시하셔도 됩니다
         if self.from_node != self.edge.source:
             # pdb.set_trace()
-            all_path = [(p.source.id, p.dest.id) for p in self.path]
+            all_path = [(p.source.id, p.dest.id) for p in self.path_to_end]
+            start_path = [(p.source.id, p.dest.id) for p in self.path_to_start]
 
             print(f"Mismatch detected: from_node={self.from_node.id}, edge.source={self.edge.source.id}")
-            print(all_path)
+            print(all_path[:5])
+            print(all_path[-5:])
+            print(start_path[:5])
+            print(start_path[-5:])
+            print(len(self.path))
             print(self.status)
             print(self.from_dist)
             print(self.edge.length)
             print(self in self.edge.OHTs)
+            # print(self.start_port.name)
+            print(self.end_port.from_node.id)
+            print(self.end_port.to_node.id)
             
         #From_dist가 edge의 length보다 길어지면 다음 엣지로 업데이트    
         while (self.from_dist > self.edge.length):
             
             self.from_node = self.edge.dest #from_node를 Edge dest로 업데이트
+            if type(self.from_node) == int:
+                print(self.id, self.from_node)
+                print('while moivng2')
             self.from_dist = self.from_dist - self.edge.length #from_dist도 업데이트
             
             if self.edge:
                 try:
-                    self.edge.OHTs.remove(self) #원래 엣지에서 현재 OHT 제거
+                     #원래 엣지에서 현재 OHT 제거
+                    if len(self.path) > 0:
+                # before_edge = copy.copy(self.edge)
+                        self.edge.OHTs.remove(self)
+                        
+                        self.edge = self.path.pop(0) #다음 엣지로 업데이트
+                        
+                        if self not in self.edge.OHTs:
+                            self.edge.OHTs.append(self) #다음 엣지 안에 OHT 추가
+                            
+                        # if before_node == self.from_node:
+                        #     # print(start_path)
+                        #     print('why this is happening????')
+                        #     print(self.id)
+                        #     # print(self.start_port.from_node.id)
+                        #     # print(self.end_port.from_node.id)
+                        #     # print(before_edge.source.id, before_edge.dest.id)
+                        #     # print(before_path)
+                    else:
+                        self.speed = 0
+                        self.acc = 0
+                        self.from_dist = self.edge.length
+                        self.from_node = self.edge.source
+                        return
                 except:
                     print('update error : ', self.edge.source.id)
 
-            if len(self.path) > 0:
-                # before_edge = copy.copy(self.edge)
-                
-                self.edge = self.path.pop(0) #다음 엣지로 업데이트
-                    
-                if self not in self.edge.OHTs:
-                    self.edge.OHTs.append(self) #다음 엣지 안에 OHT 추가
-                    
-                # if before_node == self.from_node:
-                #     # print(start_path)
-                #     print('why this is happening????')
-                #     print(self.id)
-                #     # print(self.start_port.from_node.id)
-                #     # print(self.end_port.from_node.id)
-                #     # print(before_edge.source.id, before_edge.dest.id)
-                #     # print(before_path)
-            else:
-                self.speed = 0
-                self.acc = 0
-                return
+
             
             #마찬가지로 도착했는지 확인 (여기서는 엣지가 업데이트 되었을 때 도착했는지)     
             if self.is_arrived():
@@ -394,13 +409,21 @@ class AMHS:
     
     def set_oht(self, oht_origin, oht_new):
         oht_origin.from_node = self.get_node(oht_new['from_node'])
+        if type(oht_origin.from_node) == int:
+            print(oht_origin.id, oht_origin.from_node)
+            print('while setting')
         oht_origin.from_dist = oht_new['from_dist']
         oht_origin.edge = self.get_edge(oht_new['source'], oht_new['dest'])
-        oht_origin.edge.OHTs.append(oht_origin)
+        if oht_origin.edge:
+            if oht_origin not in oht_origin.edge.OHTs:
+                oht_origin.edge.OHTs.append(oht_origin)
         oht_origin.cal_pos()
+  
             
         oht_origin.speed = oht_new['speed']
         oht_origin.status = oht_new['status']
+        
+             
         
         oht_origin.start_port = self.get_port(oht_new['startPort']) if oht_new['startPort'] else None
         oht_origin.end_port = self.get_port(oht_new['endPort']) if oht_new['endPort'] else None
@@ -418,20 +441,25 @@ class AMHS:
         
         # elif oht_origin.status == "TO_END":
         if oht_origin.end_port != None:
-            if oht_origin.edge:
-                path_edges_to_end = self.get_path_edges(oht_origin.edge.dest.id, oht_origin.end_port.to_node.id)
-                path_edges_to_end = self._validate_path(path_edges_to_end)
+            if oht_origin.status == "TO_END" or oht_origin.status == 'STOP_AT_START':
+                if oht_origin.edge:
+                    path_edges_to_end = self.get_path_edges(oht_origin.edge.dest.id, oht_origin.end_port.to_node.id)
+                    path_edges_to_end = self._validate_path(path_edges_to_end)
+                else:
+                    path_edges_to_end = self.get_path_edges(oht_origin.from_node.id, oht_origin.end_port.to_node.id)
+                    path_edges_to_end = self._validate_path(path_edges_to_end)
             else:
-                path_edges_to_end = self.get_path_edges(oht_origin.from_node.id, oht_origin.end_port.to_node.id)
-                path_edges_to_end = self._validate_path(path_edges_to_end)
+                path_edges_to_end = self.get_path_edges(oht_origin.start_port.to_node.id, oht_origin.end_port.to_node.id)
+
             oht_origin.path_to_end = path_edges_to_end
         
-        if oht_origin.status == "TO_START":
+        if oht_origin.status == "TO_START" or oht_origin.status == "IDLE":
             oht_origin.path = path_edges_to_start[:]
-        elif oht_origin.status == "TO_END":
+        elif oht_origin.status == "TO_END" or oht_origin.status == "STOP_AT_START":
             oht_origin.path = path_edges_to_end[:]
-            
-    
+        else:
+            oht_origin.path = []
+
     def modi_edge(self, source, dest, oht_positions, is_removed):
         if is_removed:
             removed_edge = self.get_edge(source, dest)
@@ -439,6 +467,7 @@ class AMHS:
                 if oht in removed_edge.OHTs:
                     oht.speed = 0
                     oht.acc = 0
+                    oht.status = 'ON_REMOVED'
             try:       
                 self.graph.remove_edge(source, dest)
             except:
@@ -457,7 +486,9 @@ class AMHS:
             
         for edge in self.edges:
             edge.OHTs.sort(key = lambda oht : -oht.from_dist)
-            
+
+    def stop_oht_on_removed(self, source, dest):
+        removed_edge = self.get_edge(source, dest)
     
     def generate_job(self):
         """모든 OHT가 Job을 갖도록 작업 생성."""
@@ -526,7 +557,7 @@ class AMHS:
         except:
             try:
                 path_nodes = nx.shortest_path(
-                    self.graph, source=source_id, target=dest_id, weight='length'
+                    self.original_graph, source=source_id, target=dest_id, weight='length'
                 )
                 # 지워진 edge를 포함한 원래 경로 반환
                 return [

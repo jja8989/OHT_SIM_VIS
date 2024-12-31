@@ -147,7 +147,7 @@ def handle_rail_update(data):
     is_removed = data['isRemoved']
     current_time = data['currentTime']  # currentTime 추가
     
-    print(oht_positions)
+    # print(oht_positions)
     
     
     print('removeRail')
@@ -155,6 +155,13 @@ def handle_rail_update(data):
     
     simulation_running = False
     stop_simulation_event.set()
+    
+    
+    if simulation_running:
+        print("Stopping current simulation before removing rail...")
+        stop_simulation_event.set()
+        while simulation_running:
+            socketio.sleep(0.01)  # Wait for the current simulation to stop
     
     socketio.emit('simulationStopped') 
 
@@ -183,6 +190,14 @@ def restart_simulation(amhs, current_time, max_time=4000, time_step=0.01):
         None
     """
     global simulation_running
+    
+    if simulation_running:
+        print("Simulation is already running. Stopping the current simulation...")
+        stop_simulation_event.set()
+        while simulation_running:
+            socketio.sleep(0.01)  # Wait for the current simulation to stop
+        return
+            
     simulation_running = True
     stop_simulation_event.clear()
 

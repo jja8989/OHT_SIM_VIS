@@ -202,7 +202,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                         .attr('class', 'oht')
                         .attr('cx', yScale(updatedOHT.x))
                         .attr('cy', yScale(updatedOHT.y))
-                        .attr('r', 1)
+                        .attr('r', 3)
                         .attr('fill', 'orange');
 
                     if (!isVisualizationStarted.current) {
