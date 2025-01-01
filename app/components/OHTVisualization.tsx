@@ -201,6 +201,8 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             const queue = ohtQueues.current.get(ohtId);
         
             if (queue && queue.length > 0) {
+                setIsRunning(true);
+
                 const updatedOHT = queue.shift()!;
                 let oht = d3.select(`#oht-${updatedOHT.id}`);
 
@@ -316,13 +318,13 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
     }, [data]);  // Remove railCounts from dependencies
 
-    const removeRail = () => {
+    const modiRail = () => {
         if (selectedRail) {
             // Update rail color to gray
-            d3.selectAll('.rail')
-                .filter(d => d === selectedRail.rail)
-                .attr('stroke', 'gray')
-                .classed('removed', true);
+            // d3.selectAll('.rail')
+            //     .filter(d => d === selectedRail.rail)
+            //     .attr('stroke', 'gray')
+            //     .classed('removed', true);
 
             // Notify backend
             // socket.emit('removeRail', { railKey: `${selectedRail.rail.from}-${selectedRail.rail.to}` });
@@ -330,6 +332,15 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
             const currentOHTPositions = Array.from(ohtQueues.current.entries()).map(([id, queue]) => queue[0]);
             const currentTime = currentOHTPositions.length > 0 ? currentOHTPositions[0].time : 0; 
+
+            const isRemoved = d3.selectAll('.rail')
+            .filter(d => d === selectedRail.rail)
+            .classed('removed');
+
+            d3.selectAll('.rail')
+            .filter(d => d === selectedRail.rail)
+            .attr('stroke', isRemoved ? colorScale(selectedRail.rail.count) : 'gray') // Restore or remove color
+            .classed('removed', !isRemoved); // Toggle the 'removed' class
 
             // socket.emit('stopSimulation');
 
@@ -355,11 +366,11 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                 console.log('Simulation stopped confirmed by backend.');
             
                 // Notify backend of the removed rail and current OHT positions
-                socket.emit('removeRail', {
+                socket.emit('modiRail', {
                     removedRailKey,
                     ohtPositions: currentOHTPositions,
                     currentTime,
-                    isRemoved: true,
+                    isRemoved: !isRemoved,
                 });
                 setIsRunning(true);
                 socket.off('simulationStopped');
@@ -399,7 +410,8 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             .each(function (d: Rail) {
                 d.count = 0; // Reset count directly on the data
             })
-            .attr('stroke', d => colorScale(d.count)); // Reset color to default
+            .attr('stroke', d => colorScale(d.count))
+            .classed('removed', false); // Reset color to default
     
         // Remove all OHT elements from the SVG
         d3.selectAll('.oht').remove();
@@ -490,7 +502,9 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                                 position: 'absolute',
                                 ...computeButtonPosition(selectedRail.x, selectedRail.y),
                                 transform: 'translate(20%, 0%)',
-                                background: 'red',
+                                background: d3.selectAll('.rail')
+                                .filter(d => d === selectedRail.rail)
+                                .classed('removed') ? 'blue' : 'red',
                                 color: 'white',
                                 border: 'none',
                                 borderRadius: '5px',
@@ -500,10 +514,12 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                             }}
                             onClick={(e) => {
                                 e.stopPropagation();
-                                removeRail();
+                                modiRail();
                             }}
                         >
-                            Remove Rail
+                        {d3.selectAll('.rail')
+                            .filter(d => d === selectedRail.rail)
+                            .classed('removed') ? 'Restore Rail' : 'Remove Rail'}
                         </button>
                     )}
                 </div>

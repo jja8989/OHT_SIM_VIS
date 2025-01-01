@@ -431,13 +431,20 @@ class AMHS:
             oht_origin.status = 'ON_REMOVED'
             oht_origin.cal_pos()
             return
-            
-        oht_origin.cal_pos()
   
             
         oht_origin.speed = oht_new['speed']
         oht_origin.status = oht_new['status']
         
+        if oht_origin.status == 'ON_REMOVED':
+            if oht_origin.start_port:
+                oht_origin.status = "TO_START"
+            elif oht_origin.end_port:
+                oht_origin.status = "TO_END"
+            else:
+                oht_origin.status = "IDLE"
+                
+        oht_origin.cal_pos()
              
         
         oht_origin.start_port = self.get_port(oht_new['startPort']) if oht_new['startPort'] else None
@@ -483,7 +490,11 @@ class AMHS:
             except:
                 print(source, dest)
         else:
-            self.graph.add_edge(source, dest)
+            edge_to_restore = next((e for e in self.edges if e.source.id == source and e.dest.id == dest), None)
+            if edge_to_restore:
+                self.graph.add_edge(source, dest, length=edge_to_restore.length, max_speed=edge_to_restore.max_speed)
+            else:
+                print(f"Rail {source} -> {dest} not found in original edges.")
         
     
     def reinitialize_simul(self, oht_positions):
@@ -497,8 +508,8 @@ class AMHS:
         for edge in self.edges:
             edge.OHTs.sort(key = lambda oht : -oht.from_dist)
 
-    def stop_oht_on_removed(self, source, dest):
-        removed_edge = self.get_edge(source, dest)
+    # def stop_oht_on_removed(self, source, dest):
+    #     removed_edge = self.get_edge(source, dest)
     
     def generate_job(self):
         """모든 OHT가 Job을 갖도록 작업 생성."""

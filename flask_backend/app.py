@@ -140,7 +140,7 @@ def stop_simulation():
     stop_simulation_event.set()  # Signal all running processes to stop
     socketio.emit('simulationStopped')  # Notify the frontend that the simulation has stopped
 
-@socketio.on('removeRail')
+@socketio.on('modiRail')
 def handle_rail_update(data):    
     global amhs
     global simulation_running
@@ -153,7 +153,7 @@ def handle_rail_update(data):
     # print(oht_positions)
     
     
-    print('removeRail')
+    print(is_removed)
 
     
     simulation_running = False
