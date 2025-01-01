@@ -179,13 +179,22 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         const updateRailColor = (railKey: string) => {
                 const rail = rails.find(r => `${r.from}-${r.to}` === railKey);
                 if (rail) {
-                    g.selectAll('.rail')
-                        .filter(d => `${d.from}-${d.to}` === railKey)
-                        .transition()
-                        .duration(500) // Transition duration for color change
-                        .attr('stroke', colorScale(rail.count)); // Update stroke color based on count
-                }
+                    // g.selectAll('.rail')
+                    //     .filter(d => `${d.from}-${d.to}` === railKey)
+                    //     .transition()
+                    //     .duration(500) // Transition duration for color change
+                    //     .attr('stroke', colorScale(rail.count)); // Update stroke color based on count
+                            const railElement = g.selectAll('.rail')
+            .filter(d => `${d.from}-${d.to}` === railKey);
+
+            if (!railElement.classed('removed')) { // Skip if the rail is marked as removed
+                railElement
+                    .transition()
+                    .duration(500) // Transition duration for color change
+                    .attr('stroke', colorScale(rail.count)); // Update stroke color based on count
+                    }
             };
+        }
             
 
         const processQueue = (ohtId: string) => {
@@ -194,6 +203,12 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             if (queue && queue.length > 0) {
                 const updatedOHT = queue.shift()!;
                 let oht = d3.select(`#oht-${updatedOHT.id}`);
+
+                const getColorByStatus = (status: string) => {
+                    if (status === "STOP_AT_START") return 'blue';
+                    if (status === "STOP_AT_END") return "red";
+                    return "orange"; // 기본 색상
+                };
         
                 // If the OHT does not exist, create it
                 if (oht.empty()) {
@@ -203,7 +218,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                         .attr('cx', yScale(updatedOHT.x))
                         .attr('cy', yScale(updatedOHT.y))
                         .attr('r', 3)
-                        .attr('fill', 'orange');
+                        .attr('fill', getColorByStatus(updatedOHT.status));
 
                     if (!isVisualizationStarted.current) {
                         isVisualizationStarted.current = true;
@@ -218,6 +233,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                     .duration(25) // Adjust animation duration
                     .attr('cx', yScale(updatedOHT.x))
                     .attr('cy', yScale(updatedOHT.y))
+                    .attr("fill", getColorByStatus(updatedOHT.status))
                     .on('start', () => {
                         // Check if the OHT has moved to a different rail
                         if (!lastKnownOHT || lastKnownOHT.source !== updatedOHT.source || lastKnownOHT.dest !== updatedOHT.dest) {
@@ -305,7 +321,8 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             // Update rail color to gray
             d3.selectAll('.rail')
                 .filter(d => d === selectedRail.rail)
-                .attr('stroke', 'gray');
+                .attr('stroke', 'gray')
+                .classed('removed', true);
 
             // Notify backend
             // socket.emit('removeRail', { railKey: `${selectedRail.rail.from}-${selectedRail.rail.to}` });

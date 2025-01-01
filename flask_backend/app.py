@@ -85,6 +85,9 @@ def run_simulation():
         for oht in amhs.OHTs:
             oht.move(time_step)
         
+        for oht in amhs.OHTs:
+            oht.cal_pos()
+        
         if count%10==0:
             for oht in amhs.OHTs:
                 oht_positions.append({
@@ -216,6 +219,9 @@ def restart_simulation(amhs, current_time, max_time=4000, time_step=0.01):
         oht_positions = []
         for oht in amhs.OHTs:
             oht.move(time_step)
+            
+        for oht in amhs.OHTs:
+            oht.cal_pos()
 
         if count % 10 == 0:  # Emit OHT positions at every 10th iteration
             for oht in amhs.OHTs:

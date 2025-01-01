@@ -82,6 +82,12 @@ class OHT():
     #move, 매 time step 마다 실행            
     def move(self, time_step):
         #node 위에만 있을 떄?? 이거 사실 잘 모르겠구 에러 나는거 해결하려고 이거저거하다가 넣었습니다
+        
+        if self.status == 'ON_REMOVED':
+            self.speed = 0
+            self.acc = 0
+            return
+        
         if not self.edge:
             # print('no edge', self.edge)
             self.speed = 0
@@ -191,7 +197,8 @@ class OHT():
         # before_pos = copy.copy(self.pos)
             
         #포지션 계산 (실제 움직임)    
-        self.cal_pos()
+        
+        # self.cal_pos()
         
         # dis = (np.sum(self.pos - before_pos)**2)**0.5
         
@@ -417,6 +424,14 @@ class AMHS:
         if oht_origin.edge:
             if oht_origin not in oht_origin.edge.OHTs:
                 oht_origin.edge.OHTs.append(oht_origin)
+                
+        if not self.graph.has_edge(oht_new['source'], oht_new['dest']):
+            oht_origin.speed = 0
+            oht_origin.acc = 0
+            oht_origin.status = 'ON_REMOVED'
+            oht_origin.cal_pos()
+            return
+            
         oht_origin.cal_pos()
   
             
@@ -463,11 +478,6 @@ class AMHS:
     def modi_edge(self, source, dest, oht_positions, is_removed):
         if is_removed:
             removed_edge = self.get_edge(source, dest)
-            for oht in oht_positions:
-                if oht in removed_edge.OHTs:
-                    oht.speed = 0
-                    oht.acc = 0
-                    oht.status = 'ON_REMOVED'
             try:       
                 self.graph.remove_edge(source, dest)
             except:
