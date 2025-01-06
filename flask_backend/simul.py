@@ -33,6 +33,28 @@ class edge():
         #edge 위에 존재하는 OHT 리스트
         self.OHTs = []  # Use a set to track OHTs
         
+        self.count = 0  # OHT가 이 Edge에 진입한 횟수
+        # self.speeds = []  # 최근 time_window 동안의 속도 저장
+        self.avg_speed = max_speed  # time_window 내 평균 속도
+        self.entry_exit_records = []
+        
+    def calculate_avg_speed(self, time_window, current_time):
+        # 주어진 time_window 안의 진입/퇴출 기록만 고려
+        relevant_records = [
+            (entry, exit) for entry, exit in self.entry_exit_records
+            if exit is not None and entry >= current_time - time_window
+        ]
+        if not relevant_records:
+            return self.max_speed  # 기록이 없으면 최대 속도로 간주
+        
+        speeds = []
+        for entry, exit in relevant_records:
+            travel_time = exit - entry
+            if travel_time > 0:
+                speeds.append(self.length / travel_time)
+        
+        return sum(speeds) / len(speeds) if speeds else self.max_speed
+    
 class port():
     def __init__(self, name, from_node, to_node, from_dist):
         #port name
@@ -80,7 +102,7 @@ class OHT():
         self.pos = self.from_node.coord + self.edge.unit_vec * self.from_dist if self.edge != None else self.from_node.coord
 
     #move, 매 time step 마다 실행            
-    def move(self, time_step):
+    def move(self, time_step, current_time):
         #node 위에만 있을 떄?? 이거 사실 잘 모르겠구 에러 나는거 해결하려고 이거저거하다가 넣었습니다
         
         if self.status == 'ON_REMOVED':
@@ -155,12 +177,24 @@ class OHT():
                      #원래 엣지에서 현재 OHT 제거
                     if len(self.path) > 0:
                 # before_edge = copy.copy(self.edge)
+                
+                        exit_record = next(
+                            (record for record in self.edge.entry_exit_records if record[1] is None), 
+                            None
+                        )
+                        
+                        if exit_record:
+                            index = self.edge.entry_exit_records.index(exit_record)
+                            self.edge.entry_exit_records[index] = (exit_record[0], current_time) 
+                    
                         self.edge.OHTs.remove(self)
                         
                         self.edge = self.path.pop(0) #다음 엣지로 업데이트
                         
                         if self not in self.edge.OHTs:
                             self.edge.OHTs.append(self) #다음 엣지 안에 OHT 추가
+                            self.edge.count += 1
+                            self.edge.entry_exit_records.append((current_time, None))
                             
                         # if before_node == self.from_node:
                         #     # print(start_path)
@@ -376,6 +410,8 @@ class AMHS:
 
         # 초기 OHT 배치
         self.initialize_OHTs(num_OHTs)
+        self.updated_edges = set()
+
 
     def _create_graph(self):
         """NetworkX 그래프를 nodes와 edges로 생성."""
@@ -552,6 +588,10 @@ class AMHS:
                         oht.edge = oht.path.pop(0)
                         if oht not in oht.edge.OHTs:
                             oht.edge.OHTs.append(oht)
+                        
+    def update_edge_metrics(self, current_time, time_window):
+        for edge in self.edges:
+            edge.avg_speed = edge.calculate_avg_speed(time_window, current_time)
 
 
     def get_node(self, node_id):

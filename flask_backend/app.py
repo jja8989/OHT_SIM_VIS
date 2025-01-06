@@ -9,6 +9,8 @@ import time
 import threading
 import math
 from simul import *
+import gzip
+import base64
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
@@ -21,6 +23,11 @@ with open('fab_oht_layout_2nd.json') as f:
 @app.route('/layout')
 def layout():
     return jsonify(layout_data)
+
+def compress_data(data):
+    json_data = json.dumps(data).encode('utf-8')
+    compressed_data = gzip.compress(json_data)
+    return base64.b64encode(compressed_data).decode('utf-8')
 
 nodes = [node(n['id'], [n['x'], n['y']]) for n in layout_data['nodes']]
 edges = [
@@ -55,7 +62,7 @@ simulation_running = False
 stop_simulation_event = threading.Event()
 
 
-def run_simulation():
+def run_simulation(max_time):
     
     global amhs
     amhs = AMHS(nodes=nodes, edges=edges, ports=ports, num_OHTs=500, max_jobs=1000)
@@ -66,10 +73,12 @@ def run_simulation():
     stop_simulation_event.clear()
 
     time_step = 0.01
-    max_time = 4000
     current_time = 0
     count = 0
     # pdb.set_trace()
+    
+    edge_metrics_cache = {}  # Cache for edge metrics to track changes
+
 
     while current_time < max_time:
         if stop_simulation_event.is_set():
@@ -83,7 +92,9 @@ def run_simulation():
         # Move all OHTs
         oht_positions = []
         for oht in amhs.OHTs:
-            oht.move(time_step)
+            oht.move(time_step, current_time)
+
+        amhs.update_edge_metrics(current_time, time_window = 10)
         
         for oht in amhs.OHTs:
             oht.cal_pos()
@@ -107,14 +118,48 @@ def run_simulation():
                     'from_dist': oht.from_dist,
                     'wait_time': oht.wait_time
                 })
+                
+            # edge_metrics = [
+            #     {
+            #         "from": edge.source.id,
+            #         "to": edge.dest.id,
+            #         "count": edge.count,
+            #         "avg_speed": edge.avg_speed,
+            #     }
+            #     for edge in amhs.edges
+            # ]
+            
+            updated_edges = []
+            for edge in amhs.edges:
+                key = f"{edge.source.id}-{edge.dest.id}"
+                new_metrics = {"count": edge.count, "avg_speed": edge.avg_speed}
+                if edge_metrics_cache.get(key) != new_metrics:
+                    edge_metrics_cache[key] = new_metrics
+                    updated_edges.append({
+                        "from": edge.source.id,
+                        "to": edge.dest.id,
+                        **new_metrics
+                    })
+
                     
                     # print(oht_positions)
 
-            # Emit the current time and OHT positions
-            socketio.emit('updateOHT', {
+            # # Emit the current time and OHT positions
+            # socketio.emit('updateOHT', {
+            #     'time': current_time,
+            #     'oht_positions': oht_positions,
+            #     'edges': updated_edges
+            #     # "edges": edge_metrics
+            # })
+            
+            payload = {
                 'time': current_time,
-                'oht_positions': oht_positions
-            })
+                'oht_positions': oht_positions,
+                'edges': updated_edges
+            }
+            
+            compressed_payload = compress_data(payload)
+            socketio.emit('updateOHT', {'data': compressed_payload})
 
         # Increment time
         current_time += time_step
@@ -129,8 +174,9 @@ def run_simulation():
 
 
 @socketio.on('startSimulation')
-def start_simulation():
-    socketio.start_background_task(run_simulation)
+def start_simulation(data):
+    max_time = data.get('max_time', 4000)
+    socketio.start_background_task(run_simulation, max_time)
     
     
 @socketio.on('stopSimulation')
@@ -203,8 +249,13 @@ def restart_simulation(amhs, current_time, max_time=4000, time_step=0.01):
             
     simulation_running = True
     stop_simulation_event.clear()
+    
+    
 
     count = 0  # Counter to manage the frequency of OHT position updates
+    
+    edge_metrics_cache = {}  # Cache for edge metrics to track changes
+
 
     while current_time < max_time:
         if stop_simulation_event.is_set():
@@ -218,7 +269,10 @@ def restart_simulation(amhs, current_time, max_time=4000, time_step=0.01):
         # Move all OHTs
         oht_positions = []
         for oht in amhs.OHTs:
-            oht.move(time_step)
+            oht.move(time_step, current_time)
+            
+        amhs.update_edge_metrics(current_time, time_window = 10)
+
             
         for oht in amhs.OHTs:
             oht.cal_pos()
@@ -239,12 +293,35 @@ def restart_simulation(amhs, current_time, max_time=4000, time_step=0.01):
                     'from_dist': oht.from_dist,
                     'wait_time': oht.wait_time
                 })
+                
+            
+            updated_edges = []
+            for edge in amhs.edges:
+                key = f"{edge.source.id}-{edge.dest.id}"
+                new_metrics = {"count": edge.count, "avg_speed": edge.avg_speed}
+                if edge_metrics_cache.get(key) != new_metrics:
+                    edge_metrics_cache[key] = new_metrics
+                    updated_edges.append({
+                        "from": edge.source.id,
+                        "to": edge.dest.id,
+                        **new_metrics
+                    })
 
             # Emit the current time and OHT positions
-            socketio.emit('updateOHT', {
+            # socketio.emit('updateOHT', {
+            #     'time': current_time,
+            #     'oht_positions': oht_positions,
+            #     'edges': updated_edges
+            # })
+        
+            payload = {
                 'time': current_time,
-                'oht_positions': oht_positions
-            })
+                'oht_positions': oht_positions,
+                'edges': updated_edges
+            }
+            
+            compressed_payload = compress_data(payload)
+            socketio.emit('updateOHT', {'data': compressed_payload})
 
         # Increment time
         current_time += time_step
@@ -252,6 +329,9 @@ def restart_simulation(amhs, current_time, max_time=4000, time_step=0.01):
 
         # Sleep for a real-time effect
         socketio.sleep(0.0001)
+        
+        if count == 0:
+            time.sleep(1)
 
     simulation_running = False
 
