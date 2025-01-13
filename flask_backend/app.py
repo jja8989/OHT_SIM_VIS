@@ -99,7 +99,7 @@ def run_simulation(max_time):
         for oht in amhs.OHTs:
             oht.cal_pos()
         
-        if count%10==0:
+        if count%5==0:
             for oht in amhs.OHTs:
                 oht_positions.append({
                     'id': oht.id,  # Unique identifier
