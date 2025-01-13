@@ -16,6 +16,7 @@ interface Rail {
     from: string;
     to: string;
     count: number;  // Add count to the Rail interface
+    avg_speed : number;
 }
 
 interface Port {
@@ -73,11 +74,12 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
     const zoomTransformRef = useRef<d3.ZoomTransform>(d3.zoomIdentity.translate(100, 50).scale(0.5));
     const ohtQueues = useRef<Map<string, OHT[]>>(new Map()); // Use ohtQueues to track last positions
-    const processingQueues = useRef<Map<string, boolean>>(new Map());
+    const processingOHTQueues = useRef<Map<string, boolean>>(new Map());
     const railsRef = useRef<Rail[]>(data.rails); // Maintain a reference to the rails
     const [selectedRail, setSelectedRail] = useState<{ rail: Rail; x: number; y: number } | null>(null);
-    const isVisualizationStarted = useRef(false);
     const [displayMode, setDisplayMode] = useState<'count' | 'avg_speed'>('count'); // 기본은 count
+    const edgeQueues = useRef<Map<string, Rail[]>>(new Map()); // Rails 큐 생성
+    const processingEdgeQueues = useRef<Map<string, boolean>>(new Map()); // Rails 처리 상태
 
 
 
@@ -194,26 +196,6 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             .on('mouseover', (event, d) => showTooltip(event, objectToString(d)))
             .on('mouseout', hideTooltip);
 
-        // const updateRailColor = (railKey: string) => {
-        //         const rail = rails.find(r => `${r.from}-${r.to}` === railKey);
-        //         if (rail) {
-        //             // g.selectAll('.rail')
-        //             //     .filter(d => `${d.from}-${d.to}` === railKey)
-        //             //     .transition()
-        //             //     .duration(500) // Transition duration for color change
-        //             //     .attr('stroke', colorScale(rail.count)); // Update stroke color based on count
-        //                     const railElement = g.selectAll('.rail')
-        //     .filter(d => `${d.from}-${d.to}` === railKey);
-
-        //     if (!railElement.classed('removed')) { // Skip if the rail is marked as removed
-        //         railElement
-        //             .transition()
-        //             .duration(500) // Transition duration for color change
-        //             .attr('stroke', colorScale(rail.count)); // Update stroke color based on count
-        //             }
-        //     };
-        // }
-
         const updateRailColor = (rail: Rail) => {
             const value = displayMode === 'count' 
                 ? rail.count / 100 // `count` 정규화 (최대 100 기준)
@@ -225,106 +207,6 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                 .duration(500) // 부드럽게 색상 변경
                 .attr('stroke', colorScale(value));
         };
-            
-
-        const processQueue = (ohtId: string) => {
-            const queue = ohtQueues.current.get(ohtId);
-        
-            if (queue && queue.length > 0) {
-                // setIsRunning(true);
-
-                const updatedOHT = queue.shift()!;
-                let oht = d3.select(`#oht-${updatedOHT.id}`);
-
-                const getColorByStatus = (status: string) => {
-                    if (status === "STOP_AT_START") return 'blue';
-                    if (status === "STOP_AT_END") return "red";
-                    return "orange"; // 기본 색상
-                };
-        
-                // If the OHT does not exist, create it
-                if (oht.empty()) {
-                    oht = g.append('circle')
-                        .attr('id', `oht-${updatedOHT.id}`)
-                        .attr('class', 'oht')
-                        .attr('cx', yScale(updatedOHT.x))
-                        .attr('cy', yScale(updatedOHT.y))
-                        .attr('r', 3)
-                        .attr('fill', getColorByStatus(updatedOHT.status));
-
-                    if (!isVisualizationStarted.current) {
-                        isVisualizationStarted.current = true;
-                        console.log('Visualization started.');
-                    }
-                }                
-        
-                const lastKnownOHT = ohtQueues.current.get(updatedOHT.id)?.[0];
-        
-                // Animate the OHT to its new position
-                oht.transition()
-                    .duration(25) // Adjust animation duration
-                    .attr('cx', yScale(updatedOHT.x))
-                    .attr('cy', yScale(updatedOHT.y))
-                    .attr("fill", getColorByStatus(updatedOHT.status))
-                    // .on('start', () => {
-                    //     // Check if the OHT has moved to a different rail
-                    //     if (!lastKnownOHT || lastKnownOHT.source !== updatedOHT.source || lastKnownOHT.dest !== updatedOHT.dest) {
-                    //         const key = `${updatedOHT.source}-${updatedOHT.dest}`;
-                    //         const rail = rails.find(r => `${r.from}-${r.to}` === key);
-                    //         if (rail) {
-                    //             rail.count += 1; // Increment the count for this rail
-                    //             updateRailColor(key); // Update rail color immediately
-                    //         }
-                    //     }
-                    // })
-                    .on('end', () => {
-                        if (queue.length > 0) {
-                            requestAnimationFrame(() => processQueue(ohtId)); // Process the next position
-                        } else {
-                            processingQueues.current.set(ohtId, false);
-        
-                            // // Only call checkSimulationComplete if all animations and visualizations are done
-                            if (Array.from(processingQueues.current.values()).every((processing) => !processing) && updatedOHT.time > 0) {
-                                // checkSimulationComplete();
-                                console.log('1')
-                            }
-                        }
-                    });
-            } else {
-                processingQueues.current.set(ohtId, false);
-                // if (Array.from(processingQueues.current.values()).every((processing) => !processing)) {
-                //     checkSimulationComplete();
-                //     console.log('2')
-                // }
-            }
-        };
-        
-        
-        // const handleOHTUpdate = (data: { time: number; oht_positions: OHT[] }) => {
-
-        //     const time = data.time;
-        //     data.oht_positions.forEach((updatedOHT) => {
-        //         if (!ohtQueues.current.has(updatedOHT.id)) {
-        //             ohtQueues.current.set(updatedOHT.id, []);
-        //         }
-        
-        //         // Add new position data to the queue for the OHT
-        //         const queue = ohtQueues.current.get(updatedOHT.id)!;
-        //         // queue.push(updatedOHT);
-        //         queue.push({ ...updatedOHT, time });
-        
-        //         // Start processing if not already in progress
-        //         if (!processingQueues.current.get(updatedOHT.id)) {
-        //             processingQueues.current.set(updatedOHT.id, true);
-        //             requestAnimationFrame(() => processQueue(updatedOHT.id));
-        //         }
-        //     });
-
-        //     // if (Array.from(processingQueues.current.values()).every((processing) => !processing) && time > 0) {
-        //     //     console.log('3')
-        //     //     checkSimulationComplete();
-        //     // }
-        // };
 
         const handleOHTUpdate = (data: { data: string }) => {
             const decompressedData = decompressData(data.data);
@@ -336,64 +218,140 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                 setIsRunning(false);
             }
         
-            // OHT 업데이트
             oht_positions.forEach((updatedOHT) => {
                 if (!ohtQueues.current.has(updatedOHT.id)) {
                     ohtQueues.current.set(updatedOHT.id, []);
                 }
                 const queue = ohtQueues.current.get(updatedOHT.id)!;
                 queue.push({ ...updatedOHT, time });
-        
-                if (!processingQueues.current.get(updatedOHT.id)) {
-                    processingQueues.current.set(updatedOHT.id, true);
-                    requestAnimationFrame(() => processQueue(updatedOHT.id));
-                }
             });
         
             // Rails 업데이트
-            edges.forEach((edge: Rail) => {
-                const rail = railsRef.current.find((r) => r.from === edge.from && r.to === edge.to);
-                if (rail) {
-                    rail.count = edge.count;
-                    rail.avg_speed = edge.avg_speed;
-                    updateRailColor(rail); // 색상 업데이트
+            edges.forEach((edge) => {
+                const edgeKey = `${edge.from}-${edge.to}`;
+                if (!edgeQueues.current.has(edgeKey)) {
+                    edgeQueues.current.set(edgeKey, []);
                 }
+                const queue = edgeQueues.current.get(edgeKey)!;
+                queue.push({ ...edge, time });
             });
         };
+
+
+                 
+        const processOHTQueue = (ohtId: string) => {
+            const queue = ohtQueues.current.get(ohtId);
         
-
-        // const checkSimulationComplete = () => {
-        //     // 모든 OHT 큐가 비어 있는지 확인
-        //     const allQueuesEmpty = Array.from(ohtQueues.current.values()).every(queue => queue.length === 0);
-
-        //     const visualizedOHTs = d3.selectAll('.oht').size();
+            if (queue && queue.length > 0) {
+                const updatedOHT = queue.shift()!;
+                let oht = d3.select(`#oht-${updatedOHT.id}`);
         
-        //     if (allQueuesEmpty && visualizedOHTs != 0 && isVisualizationStarted.current ) {
-        //         console.log('Simulation complete: All OHT queues are empty.');
-        //         setIsRunning(false); // 시뮬레이션 상태를 멈춤으로 변경
-        //         socket.emit('simulationStopped'); // 백엔드에 시뮬레이션 완료 알림
-        //     }
-        // };
+                if (oht.empty()) {
+                    oht = g.append('circle')
+                        .attr('id', `oht-${updatedOHT.id}`)
+                        .attr('class', 'oht')
+                        .attr('cx', yScale(updatedOHT.x))
+                        .attr('cy', yScale(updatedOHT.y))
+                        .attr('r', 3)
+                        .attr('fill', 'orange');
+                }
+        
+                oht.transition()
+                    .duration(25)
+                    .attr('cx', yScale(updatedOHT.x))
+                    .attr('cy', yScale(updatedOHT.y))
+                    .on('end', () => {
+                        if (queue.length > 0) {
+                            processOHTQueue(ohtId);
+                        } else {
+                            processingOHTQueues.current.set(ohtId, false);
+                        }
+                    });
+            } else {
+                processingOHTQueues.current.set(ohtId, false);
+            }
+        };
 
+        const processRailQueue = (edgeKey: string) => {
+            const queue = edgeQueues.current.get(edgeKey);
+        
+            if (queue && queue.length > 0) {
+                const updatedEdge = queue.shift()!;
+                const rail = railsRef.current.find(
+                    (r) => r.from === updatedEdge.from && r.to === updatedEdge.to
+                );
+        
+                if (rail) {
+                    rail.count = updatedEdge.count;
+                    rail.avg_speed = updatedEdge.avg_speed;
+                    updateRailColor(rail); // 색상 업데이트
+                }
+        
+                if (queue.length > 0) {
+                    processRailQueue(edgeKey);
+                } else {
+                    processingEdgeQueues.current.set(edgeKey, false);
+                }
+            } else {
+                processingEdgeQueues.current.set(edgeKey, false);
+            }
+        };
+
+        const processAllQueues = () => {
+
+            // console.log('hihi');
+
+            const firstOHTEntry = ohtQueues.current.entries().next().value;
+            if (firstOHTEntry) {
+                const [ohtId, queue] = firstOHTEntry;
+        
+                if (queue.length > 0) {
+                    const time = queue[0].time; // 첫 번째 OHT의 time 확인
+
+                    if (time == maxTime){
+                        setIsRunning(false);
+                    }
+                }
+            }
+            
+            // OHT 데이터 처리
+            ohtQueues.current.forEach((queue, ohtId) => {
+                if (queue.length > 0 && !processingOHTQueues.current.get(ohtId)) {
+                    processingOHTQueues.current.set(ohtId, true);
+                    processOHTQueue(ohtId);
+                }
+            });
+        
+            // Rail 데이터 처리
+            edgeQueues.current.forEach((queue, edgeKey) => {
+                if (queue.length > 0 && !processingEdgeQueues.current.get(edgeKey)) {
+                    processingEdgeQueues.current.set(edgeKey, true);
+                    processRailQueue(edgeKey);
+                }
+            });
+        
+            // 다음 프레임 요청
+            requestAnimationFrame(processAllQueues);
+        };
+        
         
         socket.on('updateOHT', handleOHTUpdate);
+        requestAnimationFrame(processAllQueues);
+
 
         return () => {
             socket.off('updateOHT', handleOHTUpdate);
+            ohtQueues.current.clear();
+            edgeQueues.current.clear();
+            processingOHTQueues.current.clear();
+            processingEdgeQueues.current.clear();
         };
 
     }, [data]);  // Remove railCounts from dependencies
 
     const modiRail = () => {
         if (selectedRail) {
-            // Update rail color to gray
-            // d3.selectAll('.rail')
-            //     .filter(d => d === selectedRail.rail)
-            //     .attr('stroke', 'gray')
-            //     .classed('removed', true);
 
-            // Notify backend
-            // socket.emit('removeRail', { railKey: `${selectedRail.rail.from}-${selectedRail.rail.to}` });
             const removedRailKey =  `${selectedRail.rail.from}-${selectedRail.rail.to}`;
 
             const currentOHTPositions = Array.from(ohtQueues.current.entries()).map(([id, queue]) => queue[0]);
@@ -406,22 +364,15 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             d3.selectAll('.rail')
             .filter(d => d === selectedRail.rail)
             .attr('stroke', isRemoved ? colorScale(selectedRail.rail.count) : 'gray') // Restore or remove color
-            .classed('removed', !isRemoved); // Toggle the 'removed' class
-
-            // socket.emit('stopSimulation');
+            .classed('removed', !isRemoved); 
 
             socket.disconnect();
             socket.connect();    
 
             ohtQueues.current.clear();
-            processingQueues.current.clear();
-
-            // socket.emit('removeRail', {
-            //     removedRailKey,
-            //     ohtPositions: currentOHTPositions,
-            //     currentTime,
-            //     isRemoved : true
-            // })
+            edgeQueues.current.clear();
+            processingOHTQueues.current.clear();
+            processingEdgeQueues.current.clear();
 
             socket.emit('stopSimulation');
 
@@ -443,19 +394,6 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
             });
 
-            // socket.on('simulationStopped', () => {
-            //     console.log('Simulation stopped confirmed by backend.');
-        
-            //     // Notify backend of the removed rail and current OHT positions
-            //     socket.emit('removeRail', {
-            //         removedRailKey,
-            //         ohtPositions: currentOHTPositions,
-            //         currentTime,
-            //         is_removed : true
-            //     })
-            // });
-    
-            // Clear selected rail
             setSelectedRail(null);
             setIsRunning(true);
         }
@@ -466,7 +404,6 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         console.log('Starting simulation');
         setIsRunning(true);
         socket.emit('startSimulation', { max_time: maxTime });
-        // socket.emit('startSimulation');
     };
 
     const resetSimulation = () => {
@@ -482,17 +419,24 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     
         // Remove all OHT elements from the SVG
         d3.selectAll('.oht').remove();
-    
-        // Clear OHT queues and processing states
+
         ohtQueues.current.clear();
-        processingQueues.current.clear();
+        edgeQueues.current.clear();
+        processingOHTQueues.current.clear();
+        processingEdgeQueues.current.clear();
 
         socket.disconnect();
         socket.connect();
 
+        ohtQueues.current.clear();
+        edgeQueues.current.clear();
+        processingOHTQueues.current.clear();
+        processingEdgeQueues.current.clear();
+
         d3.selectAll('.rail')
         .each(function (d: Rail) {
             d.count = 0; // Reset count directly on the data
+            d.avg_speed = 1500;
         })
         .attr('stroke', d => colorScale(d.count)); // Reset color to default
 
@@ -504,12 +448,6 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     const stopSimulation = () => {
         console.log('Stopping simulation');
         setIsRunning(false);
-    
-        // Disconnect and reconnect socket to clear data
-        // socket.disconnect();
-        // socket.connect();
-    
-        // resetSimulation(); // Clear SVG elements and data
         socket.emit('stopSimulation');
     };
 
