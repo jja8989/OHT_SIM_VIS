@@ -195,12 +195,7 @@ def handle_rail_update(data):
     oht_positions = data['ohtPositions']
     is_removed = data['isRemoved']
     current_time = data['currentTime']  # currentTime 추가
-    
-    # print(oht_positions)
-    
-    
-    print(is_removed)
-
+    edge_data = data['edges']
     
     simulation_running = False
     stop_simulation_event.set()
@@ -217,7 +212,7 @@ def handle_rail_update(data):
     # Remove the specified rail from the simulation graph
     source, dest = removed_rail_key.split('-')
     amhs.modi_edge(source, dest, oht_positions, is_removed)
-    amhs.reinitialize_simul(oht_positions)
+    amhs.reinitialize_simul(oht_positions, edge_data)
     
     socketio.start_background_task(restart_simulation, amhs, current_time)
 
@@ -306,13 +301,6 @@ def restart_simulation(amhs, current_time, max_time=4000, time_step=0.01):
                         "to": edge.dest.id,
                         **new_metrics
                     })
-
-            # Emit the current time and OHT positions
-            # socketio.emit('updateOHT', {
-            #     'time': current_time,
-            #     'oht_positions': oht_positions,
-            #     'edges': updated_edges
-            # })
         
             payload = {
                 'time': current_time,

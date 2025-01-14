@@ -36,24 +36,37 @@ class edge():
         self.count = 0  # OHT가 이 Edge에 진입한 횟수
         # self.speeds = []  # 최근 time_window 동안의 속도 저장
         self.avg_speed = max_speed  # time_window 내 평균 속도
-        self.entry_exit_records = []
-        
+        self.entry_exit_records = {} 
+            
     def calculate_avg_speed(self, time_window, current_time):
-        # 주어진 time_window 안의 진입/퇴출 기록만 고려
-        relevant_records = [
-            (entry, exit) for entry, exit in self.entry_exit_records
-            if exit is not None and entry >= current_time - time_window
-        ]
-        if not relevant_records:
-            return self.max_speed  # 기록이 없으면 최대 속도로 간주
-        
-        speeds = []
-        for entry, exit in relevant_records:
+        all_relevant_records = []
+        total_time_covered = 0  # 기록된 총 시간
+        total_distance_covered = 0  # 기록된 총 거리
+
+        for oht_id, records in self.entry_exit_records.items():
+            # time_window 내의 유효한 기록 필터링
+            relevant_records = [
+                (entry, exit) for entry, exit in records
+                if exit is not None and entry >= current_time - time_window
+            ]
+            all_relevant_records.extend(relevant_records)
+
+        # 기록된 각 구간의 속도와 이동 거리 계산
+        for entry, exit in all_relevant_records:
             travel_time = exit - entry
-            if travel_time > 0:
-                speeds.append(self.length / travel_time)
-        
-        return sum(speeds) / len(speeds) if speeds else self.max_speed
+            if travel_time > 0.01:  # 최소 이동 시간
+                speed = self.length / travel_time
+                total_time_covered += travel_time
+                total_distance_covered += speed * travel_time
+
+        # time_window에서 기록되지 않은 시간 간격 계산
+        uncovered_time = time_window - total_time_covered
+        if uncovered_time > 0:
+            total_distance_covered += self.max_speed * uncovered_time
+
+        # 전체 평균 속도 계산
+        avg_speed = total_distance_covered / time_window
+        return min(avg_speed, self.max_speed)
     
 class port():
     def __init__(self, name, from_node, to_node, from_dist):
@@ -139,37 +152,12 @@ class OHT():
         if self.is_arrived():
             self.arrive()
             return
-        
-        # before_node = copy.copy(self.from_node)
-        # ori_dist_2 = copy.copy(self.from_dist)
-        
-        #여기는 디버깅 위한 구간이라서 무시하셔도 됩니다
-        if self.from_node != self.edge.source:
-            # pdb.set_trace()
-            all_path = [(p.source.id, p.dest.id) for p in self.path_to_end]
-            start_path = [(p.source.id, p.dest.id) for p in self.path_to_start]
-
-            print(f"Mismatch detected: from_node={self.from_node.id}, edge.source={self.edge.source.id}")
-            print(all_path[:5])
-            print(all_path[-5:])
-            print(start_path[:5])
-            print(start_path[-5:])
-            print(len(self.path))
-            print(self.status)
-            print(self.from_dist)
-            print(self.edge.length)
-            print(self in self.edge.OHTs)
-            # print(self.start_port.name)
-            print(self.end_port.from_node.id)
-            print(self.end_port.to_node.id)
             
         #From_dist가 edge의 length보다 길어지면 다음 엣지로 업데이트    
         while (self.from_dist > self.edge.length):
             
             self.from_node = self.edge.dest #from_node를 Edge dest로 업데이트
-            if type(self.from_node) == int:
-                print(self.id, self.from_node)
-                print('while moivng2')
+
             self.from_dist = self.from_dist - self.edge.length #from_dist도 업데이트
             
             if self.edge:
@@ -178,15 +166,11 @@ class OHT():
                     if len(self.path) > 0:
                 # before_edge = copy.copy(self.edge)
                 
-                        exit_record = next(
-                            (record for record in self.edge.entry_exit_records if record[1] is None), 
-                            None
-                        )
-                        
-                        if exit_record:
-                            index = self.edge.entry_exit_records.index(exit_record)
-                            self.edge.entry_exit_records[index] = (exit_record[0], current_time) 
-                    
+                        exit_record = self.edge.entry_exit_records.get(self.id, [])
+                        if exit_record and exit_record[-1][1] is None:
+                            exit_record[-1] = (exit_record[-1][0], current_time)
+                        self.edge.entry_exit_records[self.id] = exit_record
+                                            
                         self.edge.OHTs.remove(self)
                         
                         self.edge = self.path.pop(0) #다음 엣지로 업데이트
@@ -194,16 +178,10 @@ class OHT():
                         if self not in self.edge.OHTs:
                             self.edge.OHTs.append(self) #다음 엣지 안에 OHT 추가
                             self.edge.count += 1
-                            self.edge.entry_exit_records.append((current_time, None))
+                            if self.id not in self.edge.entry_exit_records:
+                                self.edge.entry_exit_records[self.id] = []
+                                self.edge.entry_exit_records[self.id].append((current_time, None))
                             
-                        # if before_node == self.from_node:
-                        #     # print(start_path)
-                        #     print('why this is happening????')
-                        #     print(self.id)
-                        #     # print(self.start_port.from_node.id)
-                        #     # print(self.end_port.from_node.id)
-                        #     # print(before_edge.source.id, before_edge.dest.id)
-                        #     # print(before_path)
                     else:
                         self.speed = 0
                         self.acc = 0
@@ -213,49 +191,15 @@ class OHT():
                 except:
                     print('update error : ', self.edge.source.id)
 
-
-            
-            #마찬가지로 도착했는지 확인 (여기서는 엣지가 업데이트 되었을 때 도착했는지)     
+  
             if self.is_arrived():
                 self.arrive()
                 return
             
-        
-        #마찬가지로 도착했는지 확인 (엣지가 업데이트 안돼었을 때 도착했는지)
+
         if self.is_arrived():
             self.arrive()
             return
-        
-        
-        # after_node = self.from_node
-        # before_pos = copy.copy(self.pos)
-            
-        #포지션 계산 (실제 움직임)    
-        
-        # self.cal_pos()
-        
-        # dis = (np.sum(self.pos - before_pos)**2)**0.5
-        
-        # # print(dis)
-        # if self.from_dist > self.edge.length:
-        #     print('weird')
-            
-        # if dis > 1500:
-        #     print(dis)
-        #     print('before pos : ', before_pos)
-        #     print('pos : ' , self.pos)
-        #     print('before node : ', before_node.id, before_node.coord)
-        #     print('after node : ', after_node.id, after_node.coord)
-        #     print(self.edge.length)
-        #     print(self.edge.source.id)
-        #     print(self.edge.dest.id)
-        #     print(self.edge.dest.coord)
-        #     # print(ori_dist_1)
-        #     # print(ori_dist_2)
-        #     print(self.from_dist)
-        #     print(self.edge.unit_vec)
-        #     print(self.edge.unit_vec * self.from_dist)
-        #     print(before_node.coord + self.edge.unit_vec * self.from_dist)
             
         #가속도 고려해서 스피드 계산
         self.speed = min(max(self.speed + self.acc * time_step, 0), self.edge.max_speed)
@@ -396,6 +340,8 @@ class AMHS:
         self.edges = edges  # edge 객체 리스트
         for edge in edges:
             edge.OHTs = []
+            edge.count = 0
+            edge.avg_speed = edge.max_speed
         self.ports = ports #port list
         for p in ports:
             p.edge = self.get_edge(p.from_node, p.to_node)
@@ -410,7 +356,6 @@ class AMHS:
 
         # 초기 OHT 배치
         self.initialize_OHTs(num_OHTs)
-        self.updated_edges = set()
 
 
     def _create_graph(self):
@@ -533,19 +478,26 @@ class AMHS:
                 print(f"Rail {source} -> {dest} not found in original edges.")
         
     
-    def reinitialize_simul(self, oht_positions):
+    def reinitialize_simul(self, oht_positions, edge_data):
         for edge in self.edges:
             edge.OHTs.clear()
+            edge.entry_exit_records.clear()
         
         for oht in oht_positions:
             oht_in_amhs = self.get_oht(oht['id'])
             self.set_oht(oht_in_amhs, oht)
             
+        edge_map = {f"{edge.source.id}-{edge.dest.id}": edge for edge in self.edges}
+    
+        for edge_info in edge_data:
+            edge_key = f"{edge_info['from']}-{edge_info['to']}"
+            if edge_key in edge_map:
+                edge = edge_map[edge_key]
+                edge.count = edge_info.get('count', 0)
+                edge.avg_speed = edge_info.get('avg_speed', 0)
+            
         for edge in self.edges:
             edge.OHTs.sort(key = lambda oht : -oht.from_dist)
-
-    # def stop_oht_on_removed(self, source, dest):
-    #     removed_edge = self.get_edge(source, dest)
     
     def generate_job(self):
         """모든 OHT가 Job을 갖도록 작업 생성."""

@@ -33,6 +33,7 @@ interface OHT {
     time: number;  // Include time in OHT interface
     source: string;
     dest: string;
+    status: string;
 }
 
 interface LayoutData {
@@ -77,14 +78,25 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     const processingOHTQueues = useRef<Map<string, boolean>>(new Map());
     const railsRef = useRef<Rail[]>(data.rails); // Maintain a reference to the rails
     const [selectedRail, setSelectedRail] = useState<{ rail: Rail; x: number; y: number } | null>(null);
-    const [displayMode, setDisplayMode] = useState<'count' | 'avg_speed'>('count'); // 기본은 count
+    // const displayModeRef = useRef<'count' | 'avg_speed'>('count'); // useRef로 displayMode 관리
+
+    const [displayMode, setDisplayMode] = useState<'count' | 'avg_speed'>('count'); // 버튼 상태 관리
+    const displayModeRef = useRef(displayMode);
+
     const edgeQueues = useRef<Map<string, Rail[]>>(new Map()); // Rails 큐 생성
     const processingEdgeQueues = useRef<Map<string, boolean>>(new Map()); // Rails 처리 상태
-
-
+    const lastOHTPositions = useRef<OHT[]>([]);
+    const initialBufferSize = 100; // 초기 큐 크기 설정
+    const isInitialBufferReady = useRef(false); // 초기 큐 준비 상태
+    const lastEdgeStates = useRef<Map<string, Rail>>(new Map());
 
 
     useEffect(() => {
+
+        let rafId: number | null = null;
+        let intervalId: NodeJS.Timeout | null = null;
+
+
         const svg = d3.select(svgRef.current)
             .attr('width', '100%')  // Set the width of the SVG to be responsive
             .attr('height', '100%'); // Set the height of the SVG to be responsive
@@ -109,6 +121,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         // Initialize rail counts
         rails.forEach(rail => {
             rail.count = 0;  // Initialize count for each rail
+            rail.avg_speed = 1500;
         });
 
         // Find max values for scaling
@@ -141,8 +154,6 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             tooltip.style('visibility', 'hidden');
         };
 
-
-
         // Draw rails
         const railLines = g.selectAll('.rail')
             .data(rails)
@@ -154,7 +165,13 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             .attr('x2', d => scalePosition(nodes.find(n => n.id === d.to)!).x)
             .attr('y2', d => scalePosition(nodes.find(n => n.id === d.to)!).y)
             .attr('stroke-width', 2.5)
-            .attr('stroke', d => colorScale(d.count)) // Set initial stroke color
+            .attr('stroke', d => {
+                // Calculate the initial color based on the current display mode
+                const value = displayModeRef.current === 'count'
+                    ? d.count / 100 // Normalize `count`
+                    : (1500-d.avg_speed) / 500; // Normalize `avg_speed`
+                return colorScale(Math.max(0, Math.min(1, value))); // Clamp value between 0 and 1
+            })
             .on('mouseover', (event, d) => showTooltip(event, objectToString(d)))
             .on('mouseout', hideTooltip)
             .on('click', (event, d) => {
@@ -196,17 +213,6 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             .on('mouseover', (event, d) => showTooltip(event, objectToString(d)))
             .on('mouseout', hideTooltip);
 
-        const updateRailColor = (rail: Rail) => {
-            const value = displayMode === 'count' 
-                ? rail.count / 100 // `count` 정규화 (최대 100 기준)
-                : rail.avg_speed / 1500; // `avg_speed` 정규화 (최대 1500 기준)
-    
-            d3.selectAll('.rail')
-                .filter((d: Rail) => d.from === rail.from && d.to === rail.to)
-                .transition()
-                .duration(500) // 부드럽게 색상 변경
-                .attr('stroke', colorScale(value));
-        };
 
         const handleOHTUpdate = (data: { data: string }) => {
             const decompressedData = decompressData(data.data);
@@ -235,6 +241,15 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                 const queue = edgeQueues.current.get(edgeKey)!;
                 queue.push({ ...edge, time });
             });
+
+            if (!isInitialBufferReady.current) {
+                const totalOHTItems = Array.from(ohtQueues.current.values()).reduce((acc, queue) => acc + queue.length, 0);
+                const totalEdgeItems = Array.from(edgeQueues.current.values()).reduce((acc, queue) => acc + queue.length, 0);
+        
+                if (totalOHTItems >= initialBufferSize && totalEdgeItems >= initialBufferSize) {
+                    isInitialBufferReady.current = true;
+                }
+            }
         };
 
 
@@ -244,8 +259,16 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         
             if (queue && queue.length > 0) {
                 const updatedOHT = queue.shift()!;
+                lastOHTPositions.current = [...lastOHTPositions.current.filter(oht => oht.id !== updatedOHT.id), updatedOHT];
                 let oht = d3.select(`#oht-${updatedOHT.id}`);
+
+                const getColorByStatus = (status: string) => {
+                    if (status === "STOP_AT_START") return 'blue';
+                    if (status === "STOP_AT_END") return "red";
+                    return "orange"; // 기본 색상
+                };
         
+                // If the OHT does not exist, create it
                 if (oht.empty()) {
                     oht = g.append('circle')
                         .attr('id', `oht-${updatedOHT.id}`)
@@ -253,13 +276,15 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                         .attr('cx', yScale(updatedOHT.x))
                         .attr('cy', yScale(updatedOHT.y))
                         .attr('r', 3)
-                        .attr('fill', 'orange');
-                }
+                        .attr('fill', getColorByStatus(updatedOHT.status))
+                    };
+
         
                 oht.transition()
                     .duration(25)
                     .attr('cx', yScale(updatedOHT.x))
                     .attr('cy', yScale(updatedOHT.y))
+                    .attr('fill', getColorByStatus(updatedOHT.status))
                     .on('end', () => {
                         if (queue.length > 0) {
                             processOHTQueue(ohtId);
@@ -286,6 +311,8 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                     rail.avg_speed = updatedEdge.avg_speed;
                     updateRailColor(rail); // 색상 업데이트
                 }
+
+                lastEdgeStates.current.set(edgeKey, updatedEdge);
         
                 if (queue.length > 0) {
                     processRailQueue(edgeKey);
@@ -296,10 +323,22 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                 processingEdgeQueues.current.set(edgeKey, false);
             }
         };
+        
 
         const processAllQueues = () => {
 
-            // console.log('hihi');
+            if (!isInitialBufferReady.current) {
+                // 초기 큐가 준비되지 않은 경우, 다음 프레임 요청
+                if (document.visibilityState === "visible") {
+                    requestAnimationFrame(processAllQueues);
+                } else {
+                    setTimeout(processAllQueues, 50); // 숨겨진 상태에서 50ms마다 처리
+                }
+                return;
+            }
+            
+            lastOHTPositions.current = Array.from(ohtQueues.current.entries()).map(([id, queue]) => queue[0] ?? lastOHTPositions.current.find(oht => oht.id === id));
+
 
             const firstOHTEntry = ohtQueues.current.entries().next().value;
             if (firstOHTEntry) {
@@ -316,12 +355,13 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             
             // OHT 데이터 처리
             ohtQueues.current.forEach((queue, ohtId) => {
+                // 현재 OHT 위치 추가
                 if (queue.length > 0 && !processingOHTQueues.current.get(ohtId)) {
+                    // currentPositions.push(queue[0]); 
                     processingOHTQueues.current.set(ohtId, true);
                     processOHTQueue(ohtId);
                 }
-            });
-        
+            });        
             // Rail 데이터 처리
             edgeQueues.current.forEach((queue, edgeKey) => {
                 if (queue.length > 0 && !processingEdgeQueues.current.get(edgeKey)) {
@@ -330,13 +370,18 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                 }
             });
         
-            // 다음 프레임 요청
-            requestAnimationFrame(processAllQueues);
+            if (document.visibilityState === "visible") {
+                requestAnimationFrame(processAllQueues);
+            } else {
+                console.log("Using setTimeout in hidden mode");
+                setTimeout(processAllQueues, 50); // 숨겨진 상태에서는 50ms마다 실행
+            }
         };
         
         
         socket.on('updateOHT', handleOHTUpdate);
-        requestAnimationFrame(processAllQueues);
+        // requestAnimationFrame(processAllQueues);
+        processAllQueues();
 
 
         return () => {
@@ -349,21 +394,58 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
     }, [data]);  // Remove railCounts from dependencies
 
+    
+
+    const updateRailColor = (rail: Rail) => {
+        const selectedRail = d3.selectAll('.rail')
+            .filter((d: Rail) => d.from === rail.from && d.to === rail.to);
+    
+        // Check if the rail is marked as removed
+        const isRemoved = selectedRail.classed('removed');
+        if (isRemoved) {
+            return; // Do not update color for removed rails
+        }
+    
+        const value = displayModeRef.current === 'count' 
+            ? rail.count / 100 // Normalize `count` (max 100)
+            : (1500-rail.avg_speed) / 500; // Normalize `avg_speed` (max 1500)
+
+        selectedRail.transition()
+            .duration(500) // Smooth color change
+            .attr('stroke', colorScale(Math.max(0, Math.min(1, value))))
+    };
+
     const modiRail = () => {
         if (selectedRail) {
 
+            const currentOHTPositions = Array.from(ohtQueues.current.entries()).map(([id, queue]) => queue[0] ?? lastOHTPositions.current.find(oht => oht.id === id));
+            const currentTime = currentOHTPositions.length > 0
+                ? currentOHTPositions[0]?.time ?? (lastOHTPositions.current[0]?.time ?? 0)
+                : 0;
+
+            const currentEdgeStates = Array.from(lastEdgeStates.current.values());
+
+    
+
             const removedRailKey =  `${selectedRail.rail.from}-${selectedRail.rail.to}`;
 
-            const currentOHTPositions = Array.from(ohtQueues.current.entries()).map(([id, queue]) => queue[0]);
-            const currentTime = currentOHTPositions.length > 0 ? currentOHTPositions[0].time : 0; 
-
+            // const currentOHTPositions = Array.from(ohtQueues.current.entries()).map(([id, queue]) => queue[0]);
             const isRemoved = d3.selectAll('.rail')
             .filter(d => d === selectedRail.rail)
             .classed('removed');
 
             d3.selectAll('.rail')
             .filter(d => d === selectedRail.rail)
-            .attr('stroke', isRemoved ? colorScale(selectedRail.rail.count) : 'gray') // Restore or remove color
+            .attr('stroke', () => {
+                if (isRemoved) {
+                    // Restore color based on displayMode
+                    const value = displayModeRef.current === 'count'
+                        ? selectedRail.rail.count / 100 // Normalize count
+                        : (1500-selectedRail.rail.avg_speed) / 500; // Normalize avg_speed
+                    return colorScale(Math.max(0, Math.min(1, value))); // Clamp value
+                }
+                return 'gray'; // Set to gray when removed
+            })
             .classed('removed', !isRemoved); 
 
             socket.disconnect();
@@ -373,6 +455,9 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             edgeQueues.current.clear();
             processingOHTQueues.current.clear();
             processingEdgeQueues.current.clear();
+
+            isInitialBufferReady.current = false; // 초기 상태로 변경
+
 
             socket.emit('stopSimulation');
 
@@ -386,6 +471,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                 socket.emit('modiRail', {
                     removedRailKey,
                     ohtPositions: currentOHTPositions,
+                    edges: currentEdgeStates,
                     currentTime,
                     isRemoved: !isRemoved,
                 });
@@ -413,8 +499,8 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         d3.selectAll('.rail')
             .each(function (d: Rail) {
                 d.count = 0; // Reset count directly on the data
+                d.avg_speed = 1500;
             })
-            .attr('stroke', d => colorScale(d.count))
             .classed('removed', false); // Reset color to default
     
         // Remove all OHT elements from the SVG
@@ -438,7 +524,13 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             d.count = 0; // Reset count directly on the data
             d.avg_speed = 1500;
         })
-        .attr('stroke', d => colorScale(d.count)); // Reset color to default
+        .attr('stroke', d => {
+            // Calculate the initial color based on the current display mode
+            const value = displayModeRef.current === 'count'
+                ? d.count / 100 // Normalize `count`
+                : (1500-d.avg_speed) / 500; // Normalize `avg_speed`
+            return colorScale(Math.max(0, Math.min(1, value))); // Clamp value between 0 and 1
+        }); // Reset color to default
 
         d3.selectAll('.oht').remove();
 
@@ -490,13 +582,21 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                 <div className="flex gap-2">
                     <button 
                         className={`p-2 rounded ${displayMode === 'count' ? 'bg-blue-500' : 'bg-gray-500'}`}
-                        onClick={() => setDisplayMode('count')}
+                        onClick={() => {
+                            displayModeRef.current = 'count';
+                            setDisplayMode('count');
+                            railsRef.current.forEach(updateRailColor); // 색상 즉시 업데이트
+                        }}
                     >
                         Show Count
                     </button>
                     <button 
                         className={`p-2 rounded ${displayMode === 'avg_speed' ? 'bg-blue-500' : 'bg-gray-500'}`}
-                        onClick={() => setDisplayMode('avg_speed')}
+                        onClick={() => {
+                            displayModeRef.current = 'avg_speed';
+                            setDisplayMode('avg_speed');
+                            railsRef.current.forEach(updateRailColor); // 색상 즉시 업데이트
+                        }}
                     >
                         Show Avg Speed
                     </button>
