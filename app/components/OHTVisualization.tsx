@@ -76,9 +76,12 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     const zoomTransformRef = useRef<d3.ZoomTransform>(d3.zoomIdentity.translate(100, 50).scale(0.5));
     const ohtQueues = useRef<Map<string, OHT[]>>(new Map()); // Use ohtQueues to track last positions
     const processingOHTQueues = useRef<Map<string, boolean>>(new Map());
+    
     const railsRef = useRef<Rail[]>(data.rails); // Maintain a reference to the rails
     const [selectedRail, setSelectedRail] = useState<{ rail: Rail; x: number; y: number } | null>(null);
     // const displayModeRef = useRef<'count' | 'avg_speed'>('count'); // useRef로 displayMode 관리
+    const [updated, setUpdated] = useState(false);
+
 
     const [displayMode, setDisplayMode] = useState<'count' | 'avg_speed'>('count'); // 버튼 상태 관리
     const displayModeRef = useRef(displayMode);
@@ -90,6 +93,10 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     const isInitialBufferReady = useRef(false); // 초기 큐 준비 상태
     const lastEdgeStates = useRef<Map<string, Rail>>(new Map());
 
+
+    const objectToString = (obj: any) => {
+        return Object.entries(obj).map(([key, value]) => `${key}: ${value}`).join('\n');
+    };
 
     useEffect(() => {
 
@@ -137,9 +144,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             y: yScale(d.y)
         });
 
-        const objectToString = (obj: any) => {
-            return Object.entries(obj).map(([key, value]) => `${key}: ${value}`).join('\n');
-        };
+
 
         const tooltip = d3.select('#tooltip');
 
@@ -297,6 +302,8 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             }
         };
 
+        
+
         const processRailQueue = (edgeKey: string) => {
             const queue = edgeQueues.current.get(edgeKey);
         
@@ -309,6 +316,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                 if (rail) {
                     rail.count = updatedEdge.count;
                     rail.avg_speed = updatedEdge.avg_speed;
+       
                     updateRailColor(rail); // 색상 업데이트
                 }
 
@@ -398,7 +406,14 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
     const updateRailColor = (rail: Rail) => {
         const selectedRail = d3.selectAll('.rail')
-            .filter((d: Rail) => d.from === rail.from && d.to === rail.to);
+            .filter((d: Rail) => d.from === rail.from && d.to === rail.to)
+
+
+        if (!updated){
+            selectedRail
+            .data([rail]);
+            setUpdated(true);
+        }
     
         // Check if the rail is marked as removed
         const isRemoved = selectedRail.classed('removed');
@@ -663,6 +678,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                             startSimulation();
                         }
                         else {
+                            resetSimulation();
                             stopSimulation();
                             resetSimulation();
                         }
