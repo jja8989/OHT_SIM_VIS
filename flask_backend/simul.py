@@ -3,6 +3,7 @@ import networkx as nx
 import numpy as np
 import matplotlib.pyplot as plt
 import random
+import networkit as nk
 import copy
 import pdb
 
@@ -333,8 +334,10 @@ class AMHS:
         - num_OHTs: 초기 OHT 수
         - max_jobs: 작업 큐의 최대 크기
         """
-        self.graph = nx.DiGraph()
-        self.original_graph=nx.DiGraph()
+        # self.graph = nx.DiGraph()
+        # self.original_graph=nx.DiGraph()
+        
+        self.graph = nk.Graph(directed=True, weighted=True)  # Directed weighted graph
         
         self.nodes = nodes  # node 객체 리스트
         self.edges = edges  # edge 객체 리스트
@@ -348,28 +351,30 @@ class AMHS:
         self.OHTs = []
         self.job_queue = [] 
         self.max_jobs = max_jobs
+        
+        self.node_id_map = {}
 
         # 그래프 생성
         self._create_graph()
         
-        self.original_graph = self.graph.copy()
+        self.original_graph = nk.Graph(self.graph)
 
         # 초기 OHT 배치
         self.initialize_OHTs(num_OHTs)
+        
+
 
 
     def _create_graph(self):
         """NetworkX 그래프를 nodes와 edges로 생성."""
-        for node in self.nodes:
-            self.graph.add_node(node.id, coord=node.coord.tolist())
+        for i, node in enumerate(self.nodes):
+            self.graph.addNode()  # Add node to the graph
+            self.node_id_map[node.id] = i
         
         for edge in self.edges:
-            self.graph.add_edge(
-                edge.source.id, 
-                edge.dest.id, 
-                length=edge.length, 
-                max_speed=edge.max_speed
-            )
+            u = self.node_id_map[edge.source.id]  # Get index for source node
+            v = self.node_id_map[edge.dest.id]    # Get index for destination node
+            self.graph.addEdge(u, v, edge.length)
             edge.dest.incoming_edges.append(edge) #각 node마다 incoming edge 추가
             edge.source.outgoing_edges.append(edge)
 
@@ -397,16 +402,13 @@ class AMHS:
     
     def set_oht(self, oht_origin, oht_new):
         oht_origin.from_node = self.get_node(oht_new['from_node'])
-        if type(oht_origin.from_node) == int:
-            print(oht_origin.id, oht_origin.from_node)
-            print('while setting')
         oht_origin.from_dist = oht_new['from_dist']
         oht_origin.edge = self.get_edge(oht_new['source'], oht_new['dest'])
         if oht_origin.edge:
             if oht_origin not in oht_origin.edge.OHTs:
                 oht_origin.edge.OHTs.append(oht_origin)
                 
-        if not self.graph.has_edge(oht_new['source'], oht_new['dest']):
+        if not self.graph.hasEdge(self.node_id_map[oht_new['source']], self.node_id_map[oht_new['dest']]):
             oht_origin.speed = 0
             oht_origin.acc = 0
             oht_origin.status = 'ON_REMOVED'
@@ -467,13 +469,13 @@ class AMHS:
         if is_removed:
             removed_edge = self.get_edge(source, dest)
             try:       
-                self.graph.remove_edge(source, dest)
+                self.graph.removeEdge(self.node_id_map[source], self.node_id_map[dest])
             except:
                 print(source, dest)
         else:
             edge_to_restore = next((e for e in self.edges if e.source.id == source and e.dest.id == dest), None)
             if edge_to_restore:
-                self.graph.add_edge(source, dest, length=edge_to_restore.length, max_speed=edge_to_restore.max_speed)
+                self.graph.addEdge(self.node_id_map[source], self.node_id_map[dest], edge_to_restore.length)
             else:
                 print(f"Rail {source} -> {dest} not found in original edges.")
         
@@ -533,6 +535,8 @@ class AMHS:
 
                 # # 전체 경로를 OHT에 설정
                 oht.path = path_edges_to_start[:]
+                
+                # print(oht.path)
 
                 # Assign the first edge in the path to the OHT's edge
                 if oht.path:
@@ -560,22 +564,32 @@ class AMHS:
     def get_path_edges(self, source_id, dest_id):
         """source와 dest ID로 최단 경로 에지 리스트 반환."""
         try:
-            path_nodes = nx.shortest_path(
-                self.graph, source=source_id, target=dest_id, weight='length'
-            )
+            source_idx = self.node_id_map[source_id]
+            dest_idx = self.node_id_map[dest_id]
+            
+            dijkstra = nk.distance.Dijkstra(self.graph, source_idx, storePaths=True, storeNodesSortedByDistance=False, target=dest_idx)
+            dijkstra.run()
+
+            path = dijkstra.getPath(dest_idx)
+
+            
             return [
-                self.get_edge(path_nodes[i], path_nodes[i + 1])
-                for i in range(len(path_nodes) - 1)
+                self.get_edge(self.nodes[path[i]].id, self.nodes[path[i+1]].id)
+                for i in range(len(path) - 1)
             ]
         except:
             try:
-                path_nodes = nx.shortest_path(
-                    self.original_graph, source=source_id, target=dest_id, weight='length'
-                )
-                # 지워진 edge를 포함한 원래 경로 반환
+                source_idx = self.node_id_map[source_id]
+                dest_idx = self.node_id_map[dest_id]
+                
+                dijkstra = nk.distance.Dijkstra(self.original_graph, source_idx, storePaths=True, storeNodesSortedByDistance=False, target=dest_idx)
+                dijkstra.run()
+
+                path = dijkstra.getPath(dest_idx)
+                
                 return [
-                    self.get_edge(path_nodes[i], path_nodes[i + 1])
-                    for i in range(len(path_nodes) - 1)
+                    self.get_edge(self.nodes[path[i]].id, self.nodes[path[i+1]].id)
+                    for i in range(len(path) - 1)
                 ]
             except:
                 print(f"No path found even in original_graph for {source_id} -> {dest_id}.")
@@ -599,7 +613,7 @@ class AMHS:
         """
         valid_path = []
         for edge in path:
-            if self.graph.has_edge(edge.source.id, edge.dest.id):  # edge가 그래프에 존재하는 경우
+            if self.graph.hasEdge(self.node_id_map[edge.source.id], self.node_id_map[edge.dest.id]):  # edge가 그래프에 존재하는 경우
                 valid_path.append(edge)
             else:
                 break  # 지워진 edge를 발견하면 직전까지만 반환
