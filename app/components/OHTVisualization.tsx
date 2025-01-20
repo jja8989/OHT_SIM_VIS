@@ -69,6 +69,9 @@ const decompressData = (compressedData: string) => {
 
 const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     const [maxTime, setMaxTime] = useState(4000);
+    const [acceleratedTime, setAcceleratedTime] = useState(0);
+    const [isAccelEnabled, setIsAccelEnabled] = useState(false);  // 가속 실험 여부
+
     const [isRunning, setIsRunning] = useState(false);
     const svgRef = useRef<SVGSVGElement | null>(null);
     const gRef = useRef<SVGGElement | null>(null);
@@ -92,6 +95,38 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     const initialBufferSize = 100; // 초기 큐 크기 설정
     const isInitialBufferReady = useRef(false); // 초기 큐 준비 상태
     const lastEdgeStates = useRef<Map<string, Rail>>(new Map());
+    const rafId = useRef(null);  // Add ref for RAF ID to cancel it
+
+    const maxTimeref = useRef<HTMLInputElement | null>(null);
+    const accTimeref = useRef<HTMLInputElement | null>(null);
+
+
+    const [selectedJobFile, setSelectedJobFile] = useState<File | null>("");
+    const jobFileInputRef = useRef<HTMLInputElement | null>(null); // useRef를 사용하여 파일 input 참조 생성
+
+    const [selectedOhtFile, setSelectedOhtFile] = useState<File | null>("");
+    const OhtFileInputRef = useRef<HTMLInputElement | null>(null); // useRef를 사용하여 파일 input 참조 생성
+
+    const [isLoading, setIsLoading] = useState(false); // 스피너 상태 추가
+
+    const handleTimeChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+        setAcceleratedTime(Number(event.target.value));
+    };
+
+    const handleAccelChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+        setIsAccelEnabled(event.target.checked);  // 체크박스 상태에 따라 활성화 여부 결정
+    };
+
+
+
+    const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files ? event.target.files[0] : null;
+        if (event.target === jobFileInputRef.current) {
+            setSelectedJobFile(file); // job 파일 설정
+        } else if (event.target === OhtFileInputRef.current) {
+            setSelectedOhtFile(file); // oht 파일 설정
+        }
+    };
 
 
     const objectToString = (obj: any) => {
@@ -99,10 +134,6 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     };
 
     useEffect(() => {
-
-        let rafId: number | null = null;
-        let intervalId: NodeJS.Timeout | null = null;
-
 
         const svg = d3.select(svgRef.current)
             .attr('width', '100%')  // Set the width of the SVG to be responsive
@@ -334,17 +365,18 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         
 
         const processAllQueues = () => {
-
             if (!isInitialBufferReady.current) {
                 // 초기 큐가 준비되지 않은 경우, 다음 프레임 요청
                 if (document.visibilityState === "visible") {
-                    requestAnimationFrame(processAllQueues);
+                    rafId.current = requestAnimationFrame(processAllQueues);
                 } else {
                     setTimeout(processAllQueues, 50); // 숨겨진 상태에서 50ms마다 처리
                 }
                 return;
             }
-            
+
+            setIsLoading(false);
+
             lastOHTPositions.current = Array.from(ohtQueues.current.entries()).map(([id, queue]) => queue[0] ?? lastOHTPositions.current.find(oht => oht.id === id));
 
 
@@ -379,7 +411,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             });
         
             if (document.visibilityState === "visible") {
-                requestAnimationFrame(processAllQueues);
+                rafId.current = requestAnimationFrame(processAllQueues);
             } else {
                 console.log("Using setTimeout in hidden mode");
                 setTimeout(processAllQueues, 50); // 숨겨진 상태에서는 50ms마다 실행
@@ -394,14 +426,43 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
         return () => {
             socket.off('updateOHT', handleOHTUpdate);
+            d3.selectAll('.oht').remove();
             ohtQueues.current.clear();
             edgeQueues.current.clear();
             processingOHTQueues.current.clear();
             processingEdgeQueues.current.clear();
+            cancelAnimationFrame(rafId.current);
         };
 
     }, [data]);  // Remove railCounts from dependencies
 
+
+    // // 페이지 로드 시 stop 및 reset 호출
+    // useEffect(() => {
+    //     // 페이지가 처음 로드될 때 자동으로 stopSimulation과 resetSimulation을 호출
+    //     if (isRunning){
+    //         stopSimulation();
+    //         }
+    //     resetSimulation();
+    // }, []); // 빈 배열은 이 코드가 컴포넌트가 마운트될 때만 실행되도록 함
+
+    // // 새로고침이나 페이지 이동 시 호출을 위한 이벤트 리스너 추가
+    // useEffect(() => {
+    //     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+    //         if (isRunning){
+    //             stopSimulation();
+    //             }
+    //         resetSimulation();
+    //     };
+
+    //     // 새로 고침 또는 페이지 이동 전 호출
+    //     window.addEventListener('beforeunload', handleBeforeUnload);
+
+    //     // 컴포넌트가 언마운트될 때 이벤트 리스너 제거
+    //     return () => {
+    //         window.removeEventListener('beforeunload', handleBeforeUnload);
+    //     };
+    // }, []);
     
 
     const updateRailColor = (rail: Rail) => {
@@ -431,6 +492,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     };
 
     const modiRail = () => {
+        setIsLoading(true);
         if (selectedRail) {
 
             const currentOHTPositions = Array.from(ohtQueues.current.entries()).map(([id, queue]) => queue[0] ?? lastOHTPositions.current.find(oht => oht.id === id));
@@ -500,16 +562,55 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         }
     };
 
-    const startSimulation = () => {
+    const startSimulation = async () => {
         resetSimulation(); // Reset the state before starting
         console.log('Starting simulation');
+        setIsLoading(true);
+
+        const formData = new FormData();
+
+
+        formData.append('oht_file', selectedOhtFile);
+        formData.append('job_file', selectedJobFile);
+            // 파일 업로드
+        const response = await fetch('http://localhost:5001/upload_csv_files', {
+            method: 'POST',
+            body: formData,
+        });
+
+        if (!response.ok) {
+            throw new Error('File upload failed');
+        }
+
+        const data = await response.json();
+        console.log('Files successfully uploaded:', data);
+
+
+
+
+        const simulationData = { max_time: maxTime };
+        if (isAccelEnabled) {
+            simulationData.current_time = acceleratedTime;  // current_time을 추가
+        }
+
+        socket.emit('startSimulation', simulationData);
+
+        setSelectedJobFile(null);
+        setSelectedOhtFile(null); // Reset the file input when starting the simulation
+        maxTimeref.current.value = 0;
+        // accTimeref.current.value = 0;
+        jobFileInputRef.current.value = ""; // Reset the file input field using ref
+        OhtFileInputRef.current.value = "";
         setIsRunning(true);
-        socket.emit('startSimulation', { max_time: maxTime });
+    
+        // 시뮬레이션 시작을 위한 소켓 이벤트 전송
+
+    
     };
 
     const resetSimulation = () => {
         console.log('Resetting simulation');
-        
+
         // Reset rail counts and update colors
         d3.selectAll('.rail')
             .each(function (d: Rail) {
@@ -520,6 +621,8 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     
         // Remove all OHT elements from the SVG
         d3.selectAll('.oht').remove();
+
+        isInitialBufferReady.current = false;
 
         ohtQueues.current.clear();
         edgeQueues.current.clear();
@@ -548,7 +651,8 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         }); // Reset color to default
 
         d3.selectAll('.oht').remove();
-
+        setIsLoading(false);
+        
         console.log('Simulation reset complete');
     };
     
@@ -556,6 +660,25 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         console.log('Stopping simulation');
         setIsRunning(false);
         socket.emit('stopSimulation');
+
+        socket.off('simulationStopped');
+
+        setIsLoading(false);
+
+        socket.on('simulationStopped', () => {
+            resetSimulation()
+            if (rafId.current) {
+                cancelAnimationFrame(rafId.current);
+                rafId.current = null;  // Make sure rafId.current is set before cancelling
+            }
+
+            d3.selectAll('.oht').remove();
+            socket.off('simulationStopped');
+
+            socket.disconnect();
+            socket.connect();
+        });
+
     };
 
     const computeButtonPosition = (x: number, y: number) => {
@@ -621,7 +744,12 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                     <button className="w-10 h-10 bg-blue-500 text-white rounded hover:bg-blue-700 flex items-center justify-center" onClick={zoomOut}>-</button>
                 </div>
             </header>
-            <main className="flex-grow">
+            <main className="flex-grow relative">
+                    {isLoading && (
+                        <div className="flex justify-center items-center w-full h-full absolute bg-gray-700 bg-opacity-50 z-10">
+                            <div className="w-16 h-16 border-b-4 border-gray-300 border-solid rounded-full animate-spin border-t-4 border-blue-500"></div>
+                        </div>
+                    )}
                 <div className="w-full h-full"
                     onClick={(e) => { // SVG 내부 클릭 시 유지
                         setSelectedRail(null); // 다른 곳 클릭 시 초기화
@@ -658,34 +786,77 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                     )}
                 </div>
             </main>
-            <footer className="flex justify-between items-center p-4 bg-gray-800 text-white">
-                <div className="flex gap-2">
-                    <div className="flex flex-col items-start">
-                        <label htmlFor="max-time-input" className="text-sm font-semibold mb-1">
-                            Max Time:
-                        </label>
-                        <input
-                            id="max-time-input"
-                            type="number"
-                            value={maxTime}
-                            onChange={(e) => setMaxTime(Number(e.target.value))}
-                            className="p-2 rounded border border-gray-300 focus:outline-none focus:ring focus:ring-blue-500 text-black w-28"
-                        />
+            <footer className="flex gap-16 items-center p-4 bg-gray-800 text-white">
+                    <div className="flex gap-4">
+                        <div className="flex flex-row gap-4 justify-between items-center ">
+                        <label>
+                                <input
+                                    type="checkbox"
+                                    checked={isAccelEnabled}
+                                    onChange={handleAccelChange}
+                                    className="mr-2"
+                                />
+                                Enable Acceleration
+                            </label>
+
+                            {isAccelEnabled && (
+                                <input
+                                    ref={accTimeref}
+                                    type="number"
+                                    value={acceleratedTime}
+                                    onChange={handleTimeChange}
+                                    className="p-2 rounded border border-gray-300 focus:outline-none focus:ring focus:ring-blue-500 text-black w-28"
+                                    placeholder="Enter current time"
+                                />
+                            )}
+
+                            <label htmlFor="max-time-input" className="text-sm font-semibold mb-1">
+                                Max Time:
+                            </label>
+                            <input
+                                ref = {maxTimeref}
+                                id="max-time-input"
+                                type="number"
+                                value={maxTime}
+                                onChange={(e) => setMaxTime(Number(e.target.value))}
+                                className="p-2 rounded border border-gray-300 focus:outline-none focus:ring focus:ring-blue-500 text-black w-28"
+                            />
+                        </div>
                     </div>
-                    <button className="p-2 bg-blue-500 text-white rounded hover:bg-blue-700" onClick={() => {
-                        if (!isRunning) {
-                            resetSimulation();
-                            startSimulation();
-                        }
-                        else {
-                            resetSimulation();
-                            stopSimulation();
-                            resetSimulation();
-                        }
-                    }}>
-                        {isRunning ? 'Stop Simulation' : 'Start Simulation'}
-                    </button>
-                </div>
+                    <div className="flex items-center gap-4">
+                        <div className="flex flex-row gap-4 items-start">
+                            <input
+                                ref={jobFileInputRef}
+                                type="file"
+                                accept=".csv"
+                                onChange={handleFileChange}
+                                className="mt-2 text-sm"
+                            />
+
+                            <input
+                                ref={OhtFileInputRef}
+                                type="file"
+                                accept=".csv"
+                                onChange={handleFileChange}
+                                className="mt-2 text-sm"
+                            />
+                        </div>
+                    </div>
+                    <div>
+                        <button className="p-2 bg-blue-500 text-white rounded hover:bg-blue-700" onClick={() => {
+                            if (!isRunning) {
+                                resetSimulation();
+                                startSimulation();
+                            }
+                            else {
+                                // resetSimulation();
+                                stopSimulation();
+                                resetSimulation();
+                            }
+                        }}>
+                            {isRunning ? 'Stop Simulation' : 'Start Simulation'}
+                        </button>
+                    </div>
             </footer>
         </div>
     );

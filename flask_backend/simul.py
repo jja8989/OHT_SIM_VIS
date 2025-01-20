@@ -1,11 +1,17 @@
 #import libraries
 import networkx as nx
 import numpy as np
-import matplotlib.pyplot as plt
 import random
 import networkit as nk
-import copy
-import pdb
+import json
+import threading
+import gzip
+import base64
+
+def compress_data(data):
+    json_data = json.dumps(data).encode('utf-8')
+    compressed_data = gzip.compress(json_data)
+    return base64.b64encode(compressed_data).decode('utf-8')
 
 
 #node 클래스
@@ -18,6 +24,7 @@ class node():
         #노드로 들어오는 edge들 => intersection 쪽 충돌 감지 위해 필요
         self.incoming_edges = []
         self.outgoing_edges = []
+        self.OHT = None
         
 class edge():
     def __init__(self, source, dest, length, max_speed):
@@ -112,7 +119,8 @@ class OHT():
         self.status = "IDLE" #STATUS, IDLE / TO_START / TO_END
     
     #위치 계산 method
-    def cal_pos(self):
+    def cal_pos(self, time_step):
+        self.from_dist = self.from_dist + self.speed * time_step + 1/2 * self.acc * time_step**2
         self.pos = self.from_node.coord + self.edge.unit_vec * self.from_dist if self.edge != None else self.from_node.coord
 
     #move, 매 time step 마다 실행            
@@ -128,6 +136,8 @@ class OHT():
             # print('no edge', self.edge)
             self.speed = 0
             self.acc = 0
+            if len(self.path) != 0:
+                self.from_node.OHT = None
             return
 
         #end port 도착하면 wait time 동안 기다리기
@@ -147,7 +157,7 @@ class OHT():
         # ori_dist_1 = copy.copy(self.from_dist)
         
         #다음 스텝에 움직인 거리 계산
-        self.from_dist = self.from_dist + self.speed * time_step + 1/2 * self.acc * time_step**2
+        # self.from_dist = self.from_dist + self.speed * time_step + 1/2 * self.acc * time_step**2
         
         #만약 도착했다면 멈추기 
         if self.is_arrived():
@@ -270,6 +280,13 @@ class OHT():
                     # 가속도를 줄여 충돌 방지
                     self.acc = -self.speed/time_step # 속도 감소 또는 정지
                     return
+                
+        if self.edge.dest.OHT is not None:
+            dist_diff = self.edge.length - self.from_dist
+            if 0 < dist_diff < self.rect:  # rect 길이보다 가까워지면
+                # 가속도를 줄여 충돌 방지
+                self.acc = -self.speed/time_step # 속도 감소 또는 정지
+                return
          
          #다음 엣지에 있는 OHT들 중 제일 마지막에 있는 친구와 거리 비교       
         if len(self.path) > 0:
@@ -326,7 +343,7 @@ class OHT():
         self.acc = (self.edge.max_speed - self.speed) / time_step
         
 class AMHS:
-    def __init__(self, nodes, edges, ports, num_OHTs, max_jobs):
+    def __init__(self, nodes, edges, ports, num_OHTs, max_jobs, job_list = [], oht_list = []):
         """
         AMHS 초기화.
         - nodes: node 클래스 객체 리스트
@@ -349,10 +366,19 @@ class AMHS:
         for p in ports:
             p.edge = self.get_edge(p.from_node, p.to_node)
         self.OHTs = []
-        self.job_queue = [] 
+        if job_list != []:
+            self.job_queue = [[self.get_port(q[0]), self.get_port(q[1])] for q in job_list]
+        else:
+            self.job_queue = []
         self.max_jobs = max_jobs
         
         self.node_id_map = {}
+        
+        self.time_step=0.01
+        
+                
+        self.simulation_running = False  # 시뮬레이션 상태 관리
+        self.stop_simulation_event = threading.Event()  # 스레드 이벤트 처리
 
         # 그래프 생성
         self._create_graph()
@@ -360,9 +386,17 @@ class AMHS:
         self.original_graph = nk.Graph(self.graph)
 
         # 초기 OHT 배치
-        self.initialize_OHTs(num_OHTs)
+        if oht_list != []:
+            self.set_initial_OHTs(oht_list)
+        else:
+            self.initialize_OHTs(num_OHTs)
         
-
+        self.apsp = nk.distance.APSP(self.graph)
+        self.apsp.run()
+        
+        self.original_apsp = nk.distance.APSP(self.original_graph)
+        self.original_apsp.run()
+        
 
 
     def _create_graph(self):
@@ -398,7 +432,25 @@ class AMHS:
                 rect=1000,  # 충돌 판정 거리
                 path=[],
             )
+            start_node.OHT = oht
             self.OHTs.append(oht)
+            
+    def set_initial_OHTs(self, oht_list):
+        i = 0
+        for start_node in oht_list:  
+            start_node = self.get_node(start_node)
+            oht = OHT(
+                id=i,
+                from_node=start_node,
+                from_dist=0,
+                speed=0,
+                acc=0,
+                rect=1000,  # 충돌 판정 거리
+                path=[],
+            )
+            start_node.OHT = oht
+            self.OHTs.append(oht)
+            i = i+1
     
     def set_oht(self, oht_origin, oht_new):
         oht_origin.from_node = self.get_node(oht_new['from_node'])
@@ -407,13 +459,15 @@ class AMHS:
         if oht_origin.edge:
             if oht_origin not in oht_origin.edge.OHTs:
                 oht_origin.edge.OHTs.append(oht_origin)
-                
-        if not self.graph.hasEdge(self.node_id_map[oht_new['source']], self.node_id_map[oht_new['dest']]):
-            oht_origin.speed = 0
-            oht_origin.acc = 0
-            oht_origin.status = 'ON_REMOVED'
-            oht_origin.cal_pos()
-            return
+        try:
+            if not self.graph.hasEdge(self.node_id_map[oht_new['source']], self.node_id_map[oht_new['dest']]):
+                oht_origin.speed = 0
+                oht_origin.acc = 0
+                oht_origin.status = 'ON_REMOVED'
+                oht_origin.cal_pos(self.time_step)
+                return
+        except:
+            print('is here?', oht_new['source'])
   
             
         oht_origin.speed = oht_new['speed']
@@ -427,7 +481,7 @@ class AMHS:
             else:
                 oht_origin.status = "IDLE"
                 
-        oht_origin.cal_pos()
+        oht_origin.cal_pos(self.time_step)
              
         
         oht_origin.start_port = self.get_port(oht_new['startPort']) if oht_new['startPort'] else None
@@ -458,7 +512,7 @@ class AMHS:
 
             oht_origin.path_to_end = path_edges_to_end
         
-        if oht_origin.status == "TO_START" or oht_origin.status == "IDLE":
+        if oht_origin.status == "TO_START":
             oht_origin.path = path_edges_to_start[:]
         elif oht_origin.status == "TO_END" or oht_origin.status == "STOP_AT_START":
             oht_origin.path = path_edges_to_end[:]
@@ -470,12 +524,16 @@ class AMHS:
             removed_edge = self.get_edge(source, dest)
             try:       
                 self.graph.removeEdge(self.node_id_map[source], self.node_id_map[dest])
+                self.apsp = nk.distance.APSP(self.graph)
+                self.apsp.run()
             except:
                 print(source, dest)
         else:
             edge_to_restore = next((e for e in self.edges if e.source.id == source and e.dest.id == dest), None)
             if edge_to_restore:
                 self.graph.addEdge(self.node_id_map[source], self.node_id_map[dest], edge_to_restore.length)
+                self.apsp = nk.distance.APSP(self.graph)
+                self.apsp.run()
             else:
                 print(f"Rail {source} -> {dest} not found in original edges.")
         
@@ -503,47 +561,57 @@ class AMHS:
     
     def generate_job(self):
         """모든 OHT가 Job을 갖도록 작업 생성."""
-        for oht in self.OHTs:
-            if not oht.path and len(self.job_queue) < self.max_jobs:
-                start_port = random.choice(self.ports)
+        for _ in range(50):
+            start_port = random.choice(self.ports)
+            end_port = random.choice(self.ports)
+            while start_port == end_port:  # 시작/목적 포트가 같지 않도록 보장
                 end_port = random.choice(self.ports)
-                while start_port == end_port:  # 시작/목적 포트가 같지 않도록 보장
-                    end_port = random.choice(self.ports)
-                self.job_queue.append((start_port, end_port))
+            self.job_queue.append((start_port, end_port))
+            
 
     def assign_jobs(self):
         """모든 OHT가 Job을 갖도록 작업 할당."""
+        closest_oht = None
+        closest_dist = 1e100
         for oht in self.OHTs:
             if not oht.path and self.job_queue and oht.status == 'IDLE':  # OHT가 Idle 상태이고 Job Queue가 비어있지 않은 경우
                 start_port, end_port = self.job_queue.pop(0)
-                oht.start_port = start_port
-                # oht.start_port = next((port for port in self.ports if port.name == 'DIE0137_Port3'), None)
-                oht.end_port = end_port
-                oht.status = "TO_START"
+                dist = self.get_path_distance(oht.from_node.id, start_port.from_node.id)
+                if dist < closest_dist:
+                    closest_dist = dist
+                    closest_oht = oht
+        
+        if closest_oht:
+            oht = closest_oht
+            oht.start_port = start_port
+            # oht.start_port = next((port for port in self.ports if port.name == 'DIE0137_Port3'), None)
+            oht.end_port = end_port
+            oht.status = "TO_START"
 
-                # # Start로 이동하는 경로
-                if oht.edge:
-                    path_edges_to_start = self.get_path_edges(oht.edge.dest.id, start_port.to_node.id)
-                else:
-                    path_edges_to_start = self.get_path_edges(oht.from_node.id, start_port.to_node.id)
-                oht.path_to_start = path_edges_to_start[:]
-                
-                # # End로 이동하는 경로
-                # start_edge = [self.get_edge(start_port.from_node.id, start_port.to_node.id)]
-                path_edges_to_end = self.get_path_edges(start_port.to_node.id, end_port.to_node.id)
-                oht.path_to_end = path_edges_to_end
+            # # Start로 이동하는 경로
+            if oht.edge:
+                path_edges_to_start = self.get_path_edges(oht.edge.dest.id, start_port.to_node.id)
+            else:
+                path_edges_to_start = self.get_path_edges(oht.from_node.id, start_port.to_node.id)
+            oht.path_to_start = path_edges_to_start[:]
+            
+            # # End로 이동하는 경로
+            # start_edge = [self.get_edge(start_port.from_node.id, start_port.to_node.id)]
+            path_edges_to_end = self.get_path_edges(start_port.to_node.id, end_port.to_node.id)
+            oht.path_to_end = path_edges_to_end
 
-                # # 전체 경로를 OHT에 설정
-                oht.path = path_edges_to_start[:]
-                
-                # print(oht.path)
+            # # 전체 경로를 OHT에 설정
+            oht.path = path_edges_to_start[:]
+            
+            # print(oht.path)
 
-                # Assign the first edge in the path to the OHT's edge
-                if oht.path:
-                    if not oht.edge:
-                        oht.edge = oht.path.pop(0)
-                        if oht not in oht.edge.OHTs:
-                            oht.edge.OHTs.append(oht)
+            # Assign the first edge in the path to the OHT's edge
+            if oht.path:
+                if not oht.edge:
+                    oht.edge = oht.path.pop(0)
+                    oht.from_node.OHT = None
+                    if oht not in oht.edge.OHTs:
+                        oht.edge.OHTs.append(oht)
                         
     def update_edge_metrics(self, current_time, time_window):
         for edge in self.edges:
@@ -560,6 +628,37 @@ class AMHS:
             (e for e in self.edges if e.source.id == source_id and e.dest.id == dest_id), 
             None
         )
+        
+    def get_path_distance(self, source_id, dest_id):
+        try:
+            source_idx = self.node_id_map[source_id]
+            dest_idx = self.node_id_map[dest_id]
+            
+            # dijkstra = nk.distance.Dijkstra(self.graph, source_idx, storePaths=True, storeNodesSortedByDistance=False, target=dest_idx)
+            # dijkstra.run()
+            # dist = dijkstra.distance(dest_idx)
+            
+            dist = self.apsp.getDistance(source_idx, dest_idx)      
+            return dist
+        except:
+            try:
+                source_idx = self.node_id_map[source_id]
+                dest_idx = self.node_id_map[dest_id]
+                
+                
+                
+                # dijkstra = nk.distance.Dijkstra(self.original_graph, source_idx, storePaths=True, storeNodesSortedByDistance=False, target=dest_idx)
+                # dijkstra.run()
+
+                # dist = dijkstra.distance(dest_idx)
+            
+
+                dist = self.original_apsp.getDistance(source_idx, dest_idx)                
+                return dist
+            except:
+                print(f"No path found even in original_graph for {source_id} -> {dest_id}.")
+                return float('inf')
+        
 
     def get_path_edges(self, source_id, dest_id):
         """source와 dest ID로 최단 경로 에지 리스트 반환."""
@@ -571,7 +670,6 @@ class AMHS:
             dijkstra.run()
 
             path = dijkstra.getPath(dest_idx)
-
             
             return [
                 self.get_edge(self.nodes[path[i]].id, self.nodes[path[i+1]].id)
@@ -618,3 +716,194 @@ class AMHS:
             else:
                 break  # 지워진 edge를 발견하면 직전까지만 반환
         return valid_path
+    
+        
+    def start_simulation(self, socketio, current_time, max_time = 4000, time_step = 0.01):
+        """시뮬레이션 시작"""        
+        if self.simulation_running:
+            print("Simulation is already running. Stopping the current simulation...")
+            self.stop_simulation_event.set()
+            while self.simulation_running:
+                socketio.sleep(0.01)  # Wait for the current simulation to stop
+            return
+        
+        self.simulation_running = True
+        self.stop_simulation_event.clear()
+        
+        count = 0
+        edge_metrics_cache = {}  # Cache for edge metrics to track changes
+
+        while current_time < max_time:
+            if self.stop_simulation_event.is_set():
+                break
+            
+            if count % 5 == 0:
+                self.generate_job()
+                self.assign_jobs()
+
+            # Move all OHTs
+            oht_positions = []
+            for oht in self.OHTs:
+                oht.move(time_step, current_time)
+
+            self.update_edge_metrics(current_time, time_window=500)
+            
+            for oht in self.OHTs:
+                oht.cal_pos(time_step)
+
+            if count % 5 == 0:
+                for oht in self.OHTs:
+                    oht_positions.append({
+                        'id': oht.id,
+                        'x': oht.pos[0],
+                        'y': oht.pos[1],
+                        'source': oht.edge.source.id if oht.edge else None,
+                        'dest': oht.edge.dest.id if oht.edge else None,
+                        'speed': oht.speed,
+                        'status': oht.status,
+                        'startPort': oht.start_port.name if oht.start_port else None,
+                        'endPort': oht.end_port.name if oht.end_port else None,
+                        'from_node': oht.from_node.id if oht.from_node else None,
+                        'from_dist': oht.from_dist,
+                        'wait_time': oht.wait_time
+                    })
+
+                updated_edges = []
+                for edge in self.edges:
+                    key = f"{edge.source.id}-{edge.dest.id}"
+                    new_metrics = {"count": edge.count, "avg_speed": edge.avg_speed}
+                    if edge_metrics_cache.get(key) != new_metrics:
+                        edge_metrics_cache[key] = new_metrics
+                        updated_edges.append({
+                            "from": edge.source.id,
+                            "to": edge.dest.id,
+                            **new_metrics
+                        })
+
+                payload = {
+                    'time': current_time,
+                    'oht_positions': oht_positions,
+                    'edges': updated_edges
+                }
+
+                compressed_payload = compress_data(payload)
+                socketio.emit('updateOHT', {'data': compressed_payload})
+
+            # Increment time
+            current_time += time_step
+            count += 1
+            socketio.sleep(0.00001)
+
+        self.simulation_running = False
+        print('Simulation ended')
+        
+        
+    
+    def accelerate_simul(self, socketio, current_time, max_time = 4000, time_step = 0.01):
+        """시뮬레이션 시작"""        
+        if self.simulation_running:
+            print("Simulation is already running. Stopping the current simulation...")
+            self.stop_simulation_event.set()
+            while self.simulation_running:
+                socketio.sleep(0.01)  # Wait for the current simulation to stop
+            return
+        
+        self.simulation_running = True
+        self.stop_simulation_event.clear()
+        
+        _current_time = 0
+        
+        count = 0
+
+        while _current_time < current_time:
+            if self.stop_simulation_event.is_set():
+                break
+            
+            if count % 5 == 0:
+                self.generate_job()
+                self.assign_jobs()
+            
+            if count % 10 == 0:
+                print(_current_time)
+
+            # Move all OHTs
+            
+            for oht in self.OHTs:
+                oht.move(time_step, _current_time)
+
+            self.update_edge_metrics(_current_time, time_window=500)
+            
+            for oht in self.OHTs:
+                oht.cal_pos(time_step)
+
+            # Increment time
+            _current_time += time_step
+            count += 1
+            
+        
+        edge_metrics_cache = {} 
+            
+        
+        while _current_time < max_time:
+            if self.stop_simulation_event.is_set():
+                break
+            
+            if count % 5 == 0:
+                self.generate_job()
+                self.assign_jobs()
+
+            # Move all OHTs
+            oht_positions = []
+            for oht in self.OHTs:
+                oht.move(time_step, _current_time)
+
+            self.update_edge_metrics(_current_time, time_window=500)
+            
+            for oht in self.OHTs:
+                oht.cal_pos(time_step)
+
+            if count % 5 == 0:
+                for oht in self.OHTs:
+                    oht_positions.append({
+                        'id': oht.id,
+                        'x': oht.pos[0],
+                        'y': oht.pos[1],
+                        'source': oht.edge.source.id if oht.edge else None,
+                        'dest': oht.edge.dest.id if oht.edge else None,
+                        'speed': oht.speed,
+                        'status': oht.status,
+                        'startPort': oht.start_port.name if oht.start_port else None,
+                        'endPort': oht.end_port.name if oht.end_port else None,
+                        'from_node': oht.from_node.id if oht.from_node else None,
+                        'from_dist': oht.from_dist,
+                        'wait_time': oht.wait_time
+                    })
+
+                updated_edges = []
+                for edge in self.edges:
+                    key = f"{edge.source.id}-{edge.dest.id}"
+                    new_metrics = {"count": edge.count, "avg_speed": edge.avg_speed}
+                    if edge_metrics_cache.get(key) != new_metrics:
+                        edge_metrics_cache[key] = new_metrics
+                        updated_edges.append({
+                            "from": edge.source.id,
+                            "to": edge.dest.id,
+                            **new_metrics
+                        })
+
+                payload = {
+                    'time': current_time,
+                    'oht_positions': oht_positions,
+                    'edges': updated_edges
+                }
+
+                compressed_payload = compress_data(payload)
+                socketio.emit('updateOHT', {'data': compressed_payload})
+
+            # Increment time
+            current_time += time_step
+            count += 1
+            socketio.sleep(0.00001)
+
+        self.simulation_running = False
+        print('Simulation ended')
