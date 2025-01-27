@@ -34,3 +34,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+test.ipynb
+test.py
+
+/flask_backend/simul_parallel.py

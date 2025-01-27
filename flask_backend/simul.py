@@ -357,6 +357,8 @@ class AMHS:
         self.graph = nk.Graph(directed=True, weighted=True)  # Directed weighted graph
         
         self.nodes = nodes  # node 객체 리스트
+        for node in nodes:
+            node.OHT = None
         self.edges = edges  # edge 객체 리스트
         for edge in edges:
             edge.OHTs = []
@@ -716,6 +718,7 @@ class AMHS:
             else:
                 break  # 지워진 edge를 발견하면 직전까지만 반환
         return valid_path
+    
     
         
     def start_simulation(self, socketio, current_time, max_time = 4000, time_step = 0.01):

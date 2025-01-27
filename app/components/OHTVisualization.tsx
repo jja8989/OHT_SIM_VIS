@@ -176,7 +176,6 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         });
 
 
-
         const tooltip = d3.select('#tooltip');
 
         const showTooltip = (event: MouseEvent, content: string) => {
@@ -569,42 +568,45 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
         const formData = new FormData();
 
-
         formData.append('oht_file', selectedOhtFile);
         formData.append('job_file', selectedJobFile);
-            // 파일 업로드
-        const response = await fetch('http://localhost:5001/upload_csv_files', {
-            method: 'POST',
-            body: formData,
-        });
 
-        if (!response.ok) {
-            throw new Error('File upload failed');
-        }
-
-        const data = await response.json();
-        console.log('Files successfully uploaded:', data);
+        socket.emit('uploadFiles', formData);  // 소켓을 통해 파일 전송
 
 
 
+        //     // 파일 업로드
+        // const response = await fetch('http://localhost:5001/upload_csv_files', {
+        //     method: 'POST',
+        //     body: formData,
+        // });
 
-        const simulationData = { max_time: maxTime };
-        if (isAccelEnabled) {
-            simulationData.current_time = acceleratedTime;  // current_time을 추가
-        }
+        // if (!response.ok) {
+        //     throw new Error('File upload failed');
+        // }
 
-        socket.emit('startSimulation', simulationData);
+        // const data = await response.json();
+        // console.log('Files successfully uploaded:', data);
 
-        setSelectedJobFile(null);
-        setSelectedOhtFile(null); // Reset the file input when starting the simulation
-        maxTimeref.current.value = 0;
-        // accTimeref.current.value = 0;
-        jobFileInputRef.current.value = ""; // Reset the file input field using ref
-        OhtFileInputRef.current.value = "";
-        setIsRunning(true);
+
+        socket.on('filesProcessed', (data) => {
+            console.log('Files successfully uploaded:', data);
+            
+            const simulationData = { max_time: maxTime };
+            if (isAccelEnabled) {
+                simulationData.current_time = acceleratedTime;  // current_time을 추가
+            }
+            socket.emit('startSimulation', simulationData);  // 시뮬레이션 시작 요청
     
-        // 시뮬레이션 시작을 위한 소켓 이벤트 전송
+            setSelectedJobFile(null);
+            setSelectedOhtFile(null); // Reset the file input when starting the simulation
+            maxTimeref.current.value = 0;
+            jobFileInputRef.current.value = ""; // Reset the file input field using ref
+            OhtFileInputRef.current.value = "";
+            setIsRunning(true);
 
+            socket.off('filesProcessed');
+        });
     
     };
 

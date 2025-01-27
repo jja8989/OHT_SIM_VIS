@@ -8,8 +8,10 @@ import json
 import time
 import threading
 import math
-from simul import *
+from simul_parallel import *
 import pandas as pd
+import io
+
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
@@ -19,9 +21,9 @@ socketio = SocketIO(app, cors_allowed_origins="*")  # Enable CORS for SocketIO
 with open('fab_oht_layout_2nd.json') as f:
     layout_data = json.load(f)
 
-@app.route('/layout')
+@socketio.on('layout')
 def layout():
-    return jsonify(layout_data)
+    socketio.emit('layoutData', layout_data)
 
 
 
@@ -44,8 +46,8 @@ edges = [
 ports = [
     port(
         name = p['name'], 
-        from_node = next((node for node in nodes if node.id == p['from_node'])),
-        to_node = next((node for node in nodes if node.id == p['to_node'])),
+        from_node = p['from_node'],
+        to_node =p['to_node'],
         from_dist = p['distance']
     )
     for p in layout_data['ports']
@@ -56,37 +58,39 @@ global oht_list
 oht_list = []
 job_list = []
 
-@app.route('/upload_csv_files', methods=['POST'])
-def upload_job():
+
+@socketio.on('uploadFiles')
+def handle_file_upload(data):
     global job_list
     global oht_list
+
     job_list = []
     oht_list = []
 
+    # job_file과 oht_file을 받아옴
+    job_file = data.get('job_file')
+    oht_file = data.get('oht_file')
     
-    job_file = request.files['job_file'] if 'job_file' in request.files else ''
-    oht_file = request.files['oht_file'] if 'oht_file' in request.files else ''
-    
-    print(job_file, oht_file)
-       
-    if job_file != '':
-        df = pd.read_csv(job_file)
+    # 파일이 있을 경우 파일을 처리하여 job_list와 oht_list 업데이트
+    if job_file:
+        job_file_io = io.BytesIO(job_file)  # 받은 job_file을 BytesIO로 읽어옴
+        df = pd.read_csv(job_file_io)
         for _, row in df.iterrows():
             start_port_name = row['start_port']
             end_port_name = row['end_port']
             job_list.append([start_port_name, end_port_name])
-            
-    if oht_file != '':
-        df = pd.read_csv(oht_file)
+
+    if oht_file:
+        oht_file_io = io.BytesIO(oht_file)  # 받은 oht_file을 BytesIO로 읽어옴
+        df = pd.read_csv(oht_file_io)
         for _, row in df.iterrows():
             start_node = row['start_node']
             oht_list.append(start_node)
 
-            
-    return jsonify({"message": "File successfully uploaded"})
+    # 파일 처리 완료 후, 클라이언트에 처리된 결과를 전송
+    socketio.emit('filesProcessed', {"message": "Files successfully uploaded"})
 
 
-global amhs
 
 def run_simulation(max_time):
     global amhs
