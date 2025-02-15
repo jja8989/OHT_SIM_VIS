@@ -2,9 +2,12 @@ import React, { useEffect, useState, useRef } from 'react';
 import * as d3 from 'd3';
 import io from 'socket.io-client';
 import pako from 'pako'; // Gzip 압축 해제를 위해 pako 라이브러리 사용
+import { SunIcon, MoonIcon } from "@heroicons/react/24/outline"; // Tailwind Heroicons 추가
+import Modal from "./Modal"; // ✅ 모달 컴포넌트 추가 (결과 조회용)
 
 
-const socket = io('http://localhost:5001');
+
+const socket = io('http://localhost:5000');
 
 interface Node {
     id: string;
@@ -77,23 +80,23 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     const gRef = useRef<SVGGElement | null>(null);
     const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
     const zoomTransformRef = useRef<d3.ZoomTransform>(d3.zoomIdentity.translate(100, 50).scale(0.5));
-    const ohtQueues = useRef<Map<string, OHT[]>>(new Map()); // Use ohtQueues to track last positions
-    const processingOHTQueues = useRef<Map<string, boolean>>(new Map());
-    
+
     const railsRef = useRef<Rail[]>(data.rails); // Maintain a reference to the rails
     const [selectedRail, setSelectedRail] = useState<{ rail: Rail; x: number; y: number } | null>(null);
     // const displayModeRef = useRef<'count' | 'avg_speed'>('count'); // useRef로 displayMode 관리
     const [updated, setUpdated] = useState(false);
 
+    const simulTime = useRef(0);
+
 
     const [displayMode, setDisplayMode] = useState<'count' | 'avg_speed'>('count'); // 버튼 상태 관리
     const displayModeRef = useRef(displayMode);
 
-    const edgeQueues = useRef<Map<string, Rail[]>>(new Map()); // Rails 큐 생성
-    const processingEdgeQueues = useRef<Map<string, boolean>>(new Map()); // Rails 처리 상태
     const lastOHTPositions = useRef<OHT[]>([]);
+
     const initialBufferSize = 100; // 초기 큐 크기 설정
     const isInitialBufferReady = useRef(false); // 초기 큐 준비 상태
+    
     const lastEdgeStates = useRef<Map<string, Rail>>(new Map());
     const rafId = useRef(null);  // Add ref for RAF ID to cancel it
 
@@ -109,6 +112,31 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
     const [isLoading, setIsLoading] = useState(false); // 스피너 상태 추가
 
+    const ohtQueue: Array<{ time: number; updates: any[] }> = [];
+    const edgeQueue: Array<{ time: number; updates: any[] }> = [];
+
+    const ohtQueueRef = useRef<Array<{ time: number; updates: any[] }>>([]);
+    const edgeQueueRef = useRef<Array<{ time: number; updates: any[] }>>([]);
+
+    const yScaleRef = useRef<d3.ScaleLinear<number, number>>(d3.scaleLinear());
+
+    const [darkMode, setDarkMode] = useState(() => {
+        return localStorage.getItem("theme") === "dark";
+    });
+
+    const processTimeStepRef = useRef<() => void>(() => {});
+
+    const [ohtMode, setOhtMode] = useState<"random" | "file">("random");
+
+
+    const [ohtCount, setOhtCount] = useState(500);  // OHT 개수 상태 추가
+    const ohtCountRef = useRef<HTMLInputElement | null>(null);  // OHT 개수 입력 필드 참조
+
+
+    const [showModal, setShowModal] = useState(false); // ✅ 모달 상태 추가
+
+
+
     const handleTimeChange = (event: React.ChangeEvent<HTMLInputElement>) => {
         setAcceleratedTime(Number(event.target.value));
     };
@@ -116,8 +144,6 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     const handleAccelChange = (event: React.ChangeEvent<HTMLInputElement>) => {
         setIsAccelEnabled(event.target.checked);  // 체크박스 상태에 따라 활성화 여부 결정
     };
-
-
 
     const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files ? event.target.files[0] : null;
@@ -169,6 +195,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         // Create scales
         const yScale = d3.scaleLinear().domain([0, maxY]).range([0, 1200 - margin.top - margin.bottom]);
 
+        yScaleRef.current = yScale;
         // Scale function for nodes and ports
         const scalePosition = (d: { x: number; y: number }) => ({
             x: yScale(d.x),
@@ -180,8 +207,8 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
         const showTooltip = (event: MouseEvent, content: string) => {
             tooltip.style('visibility', 'visible')
-                .style('left', `${event.pageX + 5}px`)
-                .style('top', `${event.pageY + 5}px`)
+                .style('left', `${event.pageX + 10}px`)
+                .style('top', `${event.pageY - 100}px`)
                 .html(content.replace(/\n/g, '<br>'));
         };
 
@@ -248,220 +275,197 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             .on('mouseover', (event, d) => showTooltip(event, objectToString(d)))
             .on('mouseout', hideTooltip);
 
-
+        
         const handleOHTUpdate = (data: { data: string }) => {
             const decompressedData = decompressData(data.data);
             if (!decompressedData) return;
 
             const { time, oht_positions, edges } = decompressedData;
 
-            if (time == maxTime){
-                setIsRunning(false);
-            }
-        
-            oht_positions.forEach((updatedOHT) => {
-                if (!ohtQueues.current.has(updatedOHT.id)) {
-                    ohtQueues.current.set(updatedOHT.id, []);
-                }
-                const queue = ohtQueues.current.get(updatedOHT.id)!;
-                queue.push({ ...updatedOHT, time });
-            });
-        
-            // Rails 업데이트
-            edges.forEach((edge) => {
-                const edgeKey = `${edge.from}-${edge.to}`;
-                if (!edgeQueues.current.has(edgeKey)) {
-                    edgeQueues.current.set(edgeKey, []);
-                }
-                const queue = edgeQueues.current.get(edgeKey)!;
-                queue.push({ ...edge, time });
-            });
+            ohtQueueRef.current.push({ time, updates: oht_positions });
+            edgeQueueRef.current.push({ time, updates: edges });
+
+            // console.log(ohtQueue);
 
             if (!isInitialBufferReady.current) {
-                const totalOHTItems = Array.from(ohtQueues.current.values()).reduce((acc, queue) => acc + queue.length, 0);
-                const totalEdgeItems = Array.from(edgeQueues.current.values()).reduce((acc, queue) => acc + queue.length, 0);
-        
-                if (totalOHTItems >= initialBufferSize && totalEdgeItems >= initialBufferSize) {
+                if (ohtQueueRef.current.length >= initialBufferSize && edgeQueueRef.current.length >= initialBufferSize) {
                     isInitialBufferReady.current = true;
                 }
             }
         };
 
-
-                 
-        const processOHTQueue = (ohtId: string) => {
-            const queue = ohtQueues.current.get(ohtId);
-        
-            if (queue && queue.length > 0) {
-                const updatedOHT = queue.shift()!;
-                lastOHTPositions.current = [...lastOHTPositions.current.filter(oht => oht.id !== updatedOHT.id), updatedOHT];
-                let oht = d3.select(`#oht-${updatedOHT.id}`);
-
-                const getColorByStatus = (status: string) => {
-                    if (status === "STOP_AT_START") return 'blue';
-                    if (status === "STOP_AT_END") return "red";
-                    return "orange"; // 기본 색상
-                };
-        
-                // If the OHT does not exist, create it
-                if (oht.empty()) {
-                    oht = g.append('circle')
-                        .attr('id', `oht-${updatedOHT.id}`)
-                        .attr('class', 'oht')
-                        .attr('cx', yScale(updatedOHT.x))
-                        .attr('cy', yScale(updatedOHT.y))
-                        .attr('r', 3)
-                        .attr('fill', getColorByStatus(updatedOHT.status))
-                    };
-
-        
-                oht.transition()
-                    .duration(25)
-                    .attr('cx', yScale(updatedOHT.x))
-                    .attr('cy', yScale(updatedOHT.y))
-                    .attr('fill', getColorByStatus(updatedOHT.status))
-                    .on('end', () => {
-                        if (queue.length > 0) {
-                            processOHTQueue(ohtId);
-                        } else {
-                            processingOHTQueues.current.set(ohtId, false);
-                        }
-                    });
-            } else {
-                processingOHTQueues.current.set(ohtId, false);
-            }
+        const getColorByStatus = (status: string) => {
+            if (status === "STOP_AT_START") return "blue";
+            if (status === "STOP_AT_END") return "red";
+            return "orange";
         };
 
-        
 
-        const processRailQueue = (edgeKey: string) => {
-            const queue = edgeQueues.current.get(edgeKey);
-        
-            if (queue && queue.length > 0) {
-                const updatedEdge = queue.shift()!;
-                const rail = railsRef.current.find(
-                    (r) => r.from === updatedEdge.from && r.to === updatedEdge.to
-                );
-        
-                if (rail) {
-                    rail.count = updatedEdge.count;
-                    rail.avg_speed = updatedEdge.avg_speed;
-       
-                    updateRailColor(rail); // 색상 업데이트
-                }
+        processTimeStepRef.current = () => {
 
-                lastEdgeStates.current.set(edgeKey, updatedEdge);
-        
-                if (queue.length > 0) {
-                    processRailQueue(edgeKey);
-                } else {
-                    processingEdgeQueues.current.set(edgeKey, false);
-                }
-            } else {
-                processingEdgeQueues.current.set(edgeKey, false);
-            }
-        };
-        
-
-        const processAllQueues = () => {
             if (!isInitialBufferReady.current) {
-                // 초기 큐가 준비되지 않은 경우, 다음 프레임 요청
-                if (document.visibilityState === "visible") {
-                    rafId.current = requestAnimationFrame(processAllQueues);
-                } else {
-                    setTimeout(processAllQueues, 50); // 숨겨진 상태에서 50ms마다 처리
-                }
+                rafId.current = requestAnimationFrame(processTimeStepRef.current);
                 return;
             }
 
             setIsLoading(false);
 
-            lastOHTPositions.current = Array.from(ohtQueues.current.entries()).map(([id, queue]) => queue[0] ?? lastOHTPositions.current.find(oht => oht.id === id));
+            // console.log(edgeQueueRef.current);
+
+            const ohtData = ohtQueueRef.current.shift(); // OHT 큐에서 데이터 꺼내기
+            const edgeData = edgeQueueRef.current.shift(); // Edge 큐에서 데이터 꺼내기
 
 
-            const firstOHTEntry = ohtQueues.current.entries().next().value;
-            if (firstOHTEntry) {
-                const [ohtId, queue] = firstOHTEntry;
-        
-                if (queue.length > 0) {
-                    const time = queue[0].time; // 첫 번째 OHT의 time 확인
-
-                    if (time == maxTime){
-                        setIsRunning(false);
-                    }
-                }
+            if (ohtQueueRef.current.length === 0 || edgeQueueRef.current.length === 0) {
+                setTimeout(() => {
+                    rafId.current = requestAnimationFrame(processTimeStepRef.current);
+                }, 1000);
+                return;
             }
+
+            const { time: ohtTime, updates: ohtUpdates } = ohtData;
+            const { time: edgeTime, updates: edgeUpdates } = edgeData;
+
+            simulTime.current = ohtTime;
+
+            lastOHTPositions.current = ohtUpdates; // OHT 상태를 저장
             
-            // OHT 데이터 처리
-            ohtQueues.current.forEach((queue, ohtId) => {
-                // 현재 OHT 위치 추가
-                if (queue.length > 0 && !processingOHTQueues.current.get(ohtId)) {
-                    // currentPositions.push(queue[0]); 
-                    processingOHTQueues.current.set(ohtId, true);
-                    processOHTQueue(ohtId);
-                }
-            });        
-            // Rail 데이터 처리
-            edgeQueues.current.forEach((queue, edgeKey) => {
-                if (queue.length > 0 && !processingEdgeQueues.current.get(edgeKey)) {
-                    processingEdgeQueues.current.set(edgeKey, true);
-                    processRailQueue(edgeKey);
-                }
+            edgeUpdates.forEach((updatedEdge: Rail) => {
+                lastEdgeStates.current.set(`${updatedEdge.from}-${updatedEdge.to}`, updatedEdge); // Edge 상태를 Map에 저장
             });
-        
-            if (document.visibilityState === "visible") {
-                rafId.current = requestAnimationFrame(processAllQueues);
-            } else {
-                console.log("Using setTimeout in hidden mode");
-                setTimeout(processAllQueues, 50); // 숨겨진 상태에서는 50ms마다 실행
+
+            let pendingOHTTransitions = ohtUpdates.length;
+
+            // Process OHTs for current time
+            ohtUpdates.forEach((updatedOHT) => {
+                const oht = d3.select(`#oht-${updatedOHT.id}`)
+                            .data(ohtUpdates);
+
+                if (oht.empty()) {
+                    g.append("circle")
+                        .attr("id", `oht-${updatedOHT.id}`)
+                        .attr("class", "oht")
+                        .attr("cx", yScale(updatedOHT.x))
+                        .attr("cy", yScale(updatedOHT.y))
+                        .attr("r", 3)
+                        .attr("fill", getColorByStatus(updatedOHT.status));
+
+                        pendingOHTTransitions--;                      
+                        if (pendingOHTTransitions === 0) {
+                            // When all OHT transitions for this time step are done, process edges
+                            processEdgesForTime(edgeUpdates);
+                        }
+                }
+
+                else{
+                    oht.transition()
+                    .duration(50)
+                    .ease(d3.easeLinear) 
+                    .attr("cx", yScale(updatedOHT.x))
+                    .attr("cy", yScale(updatedOHT.y))
+                    .attr("fill", getColorByStatus(updatedOHT.status))
+                    .on("end", () => {
+                        pendingOHTTransitions--;                      
+                        if (pendingOHTTransitions === 0) {
+                            // When all OHT transitions for this time step are done, process edges
+                            processEdgesForTime(edgeUpdates);
+                        }
+                    });
+                }
+                });
+                
+            if (Number(maxTimeref.current.value) - ohtTime <= 0.3){
+                setIsRunning(false);
+                return;
             }
-        };
+
+
+            // rafId.current = requestAnimationFrame(processTimeStepRef.current);
+            };
+
+        const processEdgesForTime = (edgeUpdates: any[]) => {
+                edgeUpdates.forEach((updatedEdge) => {
+                    const rail = railsRef.current.find(
+                        (r) => r.from === updatedEdge.from && r.to === updatedEdge.to
+                    );
         
+                    if (rail) {
+                        rail.count = updatedEdge.count;
+                        rail.avg_speed = updatedEdge.avg_speed;
+                        updateRailColor(rail); // Update rail color based on state
+                    }
+                });
+                       
+                rafId.current = requestAnimationFrame(processTimeStepRef.current);
+
+            };
         
         socket.on('updateOHT', handleOHTUpdate);
-        // requestAnimationFrame(processAllQueues);
-        processAllQueues();
 
+        // rafId.current = requestAnimationFrame(processTimeStep);
 
         return () => {
             socket.off('updateOHT', handleOHTUpdate);
             d3.selectAll('.oht').remove();
-            ohtQueues.current.clear();
-            edgeQueues.current.clear();
-            processingOHTQueues.current.clear();
-            processingEdgeQueues.current.clear();
+            ohtQueueRef.current = [];
+            edgeQueueRef.current = [];
+
             cancelAnimationFrame(rafId.current);
+            rafId.current = null;
+
         };
 
     }, [data]);  // Remove railCounts from dependencies
 
+    const lightModeColors = {
+        node: "red",
+        rail: (d: Rail) => colorScale(Math.max(0, Math.min(1, displayModeRef.current === 'count' ? d.count / 100 : (1500 - d.avg_speed) / 500))),
+        port: "green"
+    };
+    
+    const darkModeColors = {
+        node: "white",  // 토마토색
+        rail: (d: Rail) => colorScale(Math.max(0, Math.min(1, displayModeRef.current === 'count' ? d.count / 100 : (1500 - d.avg_speed) / 500))).replace("rgb", "rgba").replace(")", ", 0.8)"),  // 반투명
+        port: "#00ff7f"  // 밝은 녹색
+    };
+    
+    // ✅ 다크모드 전환 시 색상 변경 함수
+    const updateColors = () => {
+        const colors = darkMode ? darkModeColors : lightModeColors;
+    
+        // Node 색상 업데이트
+        d3.selectAll(".node")
+            .transition().duration(500)
+            .attr("fill", colors.node);
+    
+        // Rail 색상 업데이트
+        d3.selectAll(".rail")
+            .transition().duration(500)
+            .attr("stroke", d => colors.rail(d));
+    
+        // Port 색상 업데이트
+        d3.selectAll(".port")
+            .transition().duration(500)
+            .attr("fill", colors.port);
+    
+        // OHT 색상 업데이트
+        d3.selectAll(".oht")
+            .transition().duration(500)
+            .attr("fill", d => colors.oht(d.status));
+    };
+    
 
-    // // 페이지 로드 시 stop 및 reset 호출
-    // useEffect(() => {
-    //     // 페이지가 처음 로드될 때 자동으로 stopSimulation과 resetSimulation을 호출
-    //     if (isRunning){
-    //         stopSimulation();
-    //         }
-    //     resetSimulation();
-    // }, []); // 빈 배열은 이 코드가 컴포넌트가 마운트될 때만 실행되도록 함
+    useEffect(() => {
+        if (darkMode) {
+            document.documentElement.classList.add("dark");
+            localStorage.setItem("theme", "dark");
+        } else {
+            document.documentElement.classList.remove("dark");
+            localStorage.setItem("theme", "light");
+        }
 
-    // // 새로고침이나 페이지 이동 시 호출을 위한 이벤트 리스너 추가
-    // useEffect(() => {
-    //     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-    //         if (isRunning){
-    //             stopSimulation();
-    //             }
-    //         resetSimulation();
-    //     };
-
-    //     // 새로 고침 또는 페이지 이동 전 호출
-    //     window.addEventListener('beforeunload', handleBeforeUnload);
-
-    //     // 컴포넌트가 언마운트될 때 이벤트 리스너 제거
-    //     return () => {
-    //         window.removeEventListener('beforeunload', handleBeforeUnload);
-    //     };
-    // }, []);
+        updateColors();
+    }, [darkMode]);
     
 
     const updateRailColor = (rail: Rail) => {
@@ -469,11 +473,11 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             .filter((d: Rail) => d.from === rail.from && d.to === rail.to)
 
 
-        if (!updated){
-            selectedRail
-            .data([rail]);
-            setUpdated(true);
-        }
+        // if (!updated){
+        //     selectedRail
+        //     .data([rail]);
+        //     setUpdated(true);
+        // }
     
         // Check if the rail is marked as removed
         const isRemoved = selectedRail.classed('removed');
@@ -486,26 +490,25 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             : (1500-rail.avg_speed) / 500; // Normalize `avg_speed` (max 1500)
 
         selectedRail.transition()
-            .duration(500) // Smooth color change
+            .duration(25) // Smooth color change
             .attr('stroke', colorScale(Math.max(0, Math.min(1, value))))
     };
 
     const modiRail = () => {
+
+        if (rafId.current) {
+            cancelAnimationFrame(rafId.current);
+            rafId.current = null;  // Make sure rafId.current is set before cancelling
+        }
+
         setIsLoading(true);
         if (selectedRail) {
-
-            const currentOHTPositions = Array.from(ohtQueues.current.entries()).map(([id, queue]) => queue[0] ?? lastOHTPositions.current.find(oht => oht.id === id));
-            const currentTime = currentOHTPositions.length > 0
-                ? currentOHTPositions[0]?.time ?? (lastOHTPositions.current[0]?.time ?? 0)
-                : 0;
-
-            const currentEdgeStates = Array.from(lastEdgeStates.current.values());
-
+            const currentTime = simulTime.current; // 현재 시뮬레이션 시간을 가져오기
+            const currentOHTPositions = lastOHTPositions.current; // 현재 OHT 상태
+            const currentEdgeStates = Array.from(lastEdgeStates.current.values()); // 현재 Edge 상태를 Array로 변환
     
-
             const removedRailKey =  `${selectedRail.rail.from}-${selectedRail.rail.to}`;
 
-            // const currentOHTPositions = Array.from(ohtQueues.current.entries()).map(([id, queue]) => queue[0]);
             const isRemoved = d3.selectAll('.rail')
             .filter(d => d === selectedRail.rail)
             .classed('removed');
@@ -524,26 +527,30 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             })
             .classed('removed', !isRemoved); 
 
+
             socket.disconnect();
             socket.connect();    
 
-            ohtQueues.current.clear();
-            edgeQueues.current.clear();
-            processingOHTQueues.current.clear();
-            processingEdgeQueues.current.clear();
+
 
             isInitialBufferReady.current = false; // 초기 상태로 변경
 
+            if (rafId.current) {
+                cancelAnimationFrame(rafId.current);
+                rafId.current = null; // 반드시 초기화
+            }
 
             socket.emit('stopSimulation');
 
             socket.off('simulationStopped');
 
-
             socket.on('simulationStopped', () => {
-                console.log('Simulation stopped confirmed by backend.');
-            
+                console.log('Simulation stopped confirmed by backend.');            
                 // Notify backend of the removed rail and current OHT positions
+                
+                ohtQueueRef.current = [];
+                edgeQueueRef.current = [];
+
                 socket.emit('modiRail', {
                     removedRailKey,
                     ohtPositions: currentOHTPositions,
@@ -551,7 +558,12 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                     currentTime,
                     isRemoved: !isRemoved,
                 });
+
+                // requestAnimationFrame(processTimeStep);
                 setIsRunning(true);
+                if (!rafId.current) {
+                    rafId.current = requestAnimationFrame(processTimeStepRef.current);
+                }    
                 socket.off('simulationStopped');
 
             });
@@ -561,8 +573,8 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         }
     };
 
-    const startSimulation = async () => {
-        resetSimulation(); // Reset the state before starting
+    const startSimulation = () => {
+        // resetSimulation(); // Reset the state before starting
         console.log('Starting simulation');
         setIsLoading(true);
 
@@ -573,26 +585,12 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
         socket.emit('uploadFiles', formData);  // 소켓을 통해 파일 전송
 
-
-
-        //     // 파일 업로드
-        // const response = await fetch('http://localhost:5001/upload_csv_files', {
-        //     method: 'POST',
-        //     body: formData,
-        // });
-
-        // if (!response.ok) {
-        //     throw new Error('File upload failed');
-        // }
-
-        // const data = await response.json();
-        // console.log('Files successfully uploaded:', data);
-
-
         socket.on('filesProcessed', (data) => {
             console.log('Files successfully uploaded:', data);
+
+            maxTimeref.current.value = maxTime;
             
-            const simulationData = { max_time: maxTime };
+            const simulationData = { max_time: maxTime, num_OHTs: ohtCount };
             if (isAccelEnabled) {
                 simulationData.current_time = acceleratedTime;  // current_time을 추가
             }
@@ -600,10 +598,18 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     
             setSelectedJobFile(null);
             setSelectedOhtFile(null); // Reset the file input when starting the simulation
-            maxTimeref.current.value = 0;
-            jobFileInputRef.current.value = ""; // Reset the file input field using ref
-            OhtFileInputRef.current.value = "";
+            if (jobFileInputRef.current) {
+                jobFileInputRef.current.value = "";
+            }
+            
+            if (OhtFileInputRef.current) {
+                OhtFileInputRef.current.value = "";
+            }
             setIsRunning(true);
+
+            if (!rafId.current) {
+                rafId.current = requestAnimationFrame(processTimeStepRef.current);
+            }
 
             socket.off('filesProcessed');
         });
@@ -613,31 +619,34 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     const resetSimulation = () => {
         console.log('Resetting simulation');
 
-        // Reset rail counts and update colors
-        d3.selectAll('.rail')
-            .each(function (d: Rail) {
-                d.count = 0; // Reset count directly on the data
-                d.avg_speed = 1500;
-            })
-            .classed('removed', false); // Reset color to default
+        if (rafId.current) {
+            cancelAnimationFrame(rafId.current);
+            rafId.current = null;  // Make sure rafId.current is set before cancelling
+        }
     
         // Remove all OHT elements from the SVG
         d3.selectAll('.oht').remove();
 
         isInitialBufferReady.current = false;
 
-        ohtQueues.current.clear();
-        edgeQueues.current.clear();
-        processingOHTQueues.current.clear();
-        processingEdgeQueues.current.clear();
-
         socket.disconnect();
         socket.connect();
 
-        ohtQueues.current.clear();
-        edgeQueues.current.clear();
-        processingOHTQueues.current.clear();
-        processingEdgeQueues.current.clear();
+        ohtQueueRef.current = [];
+        edgeQueueRef.current = [];
+
+        // Reset rail counts and update colors
+        railsRef.current.forEach((rail) => {
+            rail.count = 0;
+            rail.avg_speed = 1500; // ✅ avg_speed도 초기화
+        });
+
+        d3.selectAll('.rail')
+            .each(function (d: Rail) {
+                d.count = 0; // Reset count directly on the data
+                d.avg_speed = 1500;
+            })
+            .classed('removed', false); // Reset color to default
 
         d3.selectAll('.rail')
         .each(function (d: Rail) {
@@ -668,13 +677,37 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         setIsLoading(false);
 
         socket.on('simulationStopped', () => {
-            resetSimulation()
-            if (rafId.current) {
-                cancelAnimationFrame(rafId.current);
-                rafId.current = null;  // Make sure rafId.current is set before cancelling
-            }
-
             d3.selectAll('.oht').remove();
+
+            ohtQueueRef.current = [];
+            edgeQueueRef.current = [];
+
+                        // Reset rail counts and update colors
+            railsRef.current.forEach((rail) => {
+                rail.count = 0;
+                rail.avg_speed = 1500; // ✅ avg_speed도 초기화
+            });
+
+            d3.selectAll('.rail')
+                .each(function (d: Rail) {
+                    d.count = 0; // Reset count directly on the data
+                    d.avg_speed = 1500;
+                })
+                .classed('removed', false); // Reset color to default
+   
+            d3.selectAll('.rail')
+            .each(function (d: Rail) {
+                d.count = 0; // Reset count directly on the data
+                d.avg_speed = 1500;
+            })
+            .attr('stroke', d => {
+                // Calculate the initial color based on the current display mode
+                const value = displayModeRef.current === 'count'
+                    ? d.count / 100 // Normalize `count`
+                    : (1500-d.avg_speed) / 500; // Normalize `avg_speed`
+                return colorScale(Math.max(0, Math.min(1, value))); // Clamp value between 0 and 1
+            }); // Reset color to default
+    
             socket.off('simulationStopped');
 
             socket.disconnect();
@@ -704,7 +737,6 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         };
     };
     
-
     const zoomIn = () => {
         const svg = d3.select(svgRef.current);
         svg.transition().call(zoomRef.current.scaleBy, 1.2);
@@ -715,51 +747,82 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         svg.transition().call(zoomRef.current.scaleBy, 0.8);
     };
 
+
     return (
-        <div className="flex flex-col h-screen" onClick={() => setSelectedRail(null)}>
-            <header className="flex justify-between items-center p-4 bg-gray-800 text-white">
-                <h1>OHT Railway Simulation</h1>
+        <div className={`flex flex-col h-screen ${darkMode ? "bg-[#0F172A] text-gray-200" : "bg-white text-gray-900"}`} onClick={() => setSelectedRail(null)}>
+            {/* 헤더 */}
+            <header className={`flex justify-between items-center p-4 ${darkMode ? "bg-[#1E293B]" : "bg-[#F8FAFC]"} shadow-md`}>
+            <h1 className="text-lg font-semibold tracking-wide">OHT Railway Simulation</h1>
                 <div className="flex gap-2">
                     <button 
-                        className={`p-2 rounded ${displayMode === 'count' ? 'bg-blue-500' : 'bg-gray-500'}`}
+                        className={`p-2 rounded ${displayMode === 'count' ? 'bg-blue-600' : 'bg-gray-600'} transition hover:bg-blue-700`}
                         onClick={() => {
                             displayModeRef.current = 'count';
                             setDisplayMode('count');
-                            railsRef.current.forEach(updateRailColor); // 색상 즉시 업데이트
+                            railsRef.current.forEach(updateRailColor);
                         }}
                     >
                         Show Count
                     </button>
                     <button 
-                        className={`p-2 rounded ${displayMode === 'avg_speed' ? 'bg-blue-500' : 'bg-gray-500'}`}
+                        className={`p-2 rounded ${displayMode === 'avg_speed' ? 'bg-blue-600' : 'bg-gray-600'} transition hover:bg-blue-700`}
                         onClick={() => {
                             displayModeRef.current = 'avg_speed';
                             setDisplayMode('avg_speed');
-                            railsRef.current.forEach(updateRailColor); // 색상 즉시 업데이트
+                            railsRef.current.forEach(updateRailColor);
                         }}
                     >
                         Show Avg Speed
                     </button>
                 </div>
                 <div className="flex gap-2">
-                    <button className="w-10 h-10 bg-blue-500 text-white rounded hover:bg-blue-700 flex items-center justify-center" onClick={zoomIn}>+</button>
-                    <button className="w-10 h-10 bg-blue-500 text-white rounded hover:bg-blue-700 flex items-center justify-center" onClick={zoomOut}>-</button>
+                    <button className="w-10 h-10 bg-blue-600 text-white rounded-full hover:bg-blue-800 flex items-center justify-center shadow-md" onClick={zoomIn}>+</button>
+                    <button className="w-10 h-10 bg-blue-600 text-white rounded-full hover:bg-blue-800 flex items-center justify-center shadow-md" onClick={zoomOut}>-</button>
+
+                    <button 
+                        className="p-2 bg-gray-700 text-white rounded hover:bg-gray-500 transition"
+                        onClick={() => setShowModal(true)}
+                        >
+                            View Simulations
+                        </button>
+
+                    <button 
+                        className="p-2 rounded-full bg-gray-600 hover:bg-gray-500 transition"
+                        onClick={() => setDarkMode(!darkMode)}
+                    >
+                        {darkMode ? <SunIcon className="w-6 h-6 text-yellow-400" /> : <MoonIcon className="w-6 h-6 text-gray-900" />}
+                    </button>
                 </div>
             </header>
+
+
+            {/* 메인 시각화 */}
             <main className="flex-grow relative">
-                    {isLoading && (
-                        <div className="flex justify-center items-center w-full h-full absolute bg-gray-700 bg-opacity-50 z-10">
-                            <div className="w-16 h-16 border-b-4 border-gray-300 border-solid rounded-full animate-spin border-t-4 border-blue-500"></div>
-                        </div>
-                    )}
-                <div className="w-full h-full"
-                    onClick={(e) => { // SVG 내부 클릭 시 유지
-                        setSelectedRail(null); // 다른 곳 클릭 시 초기화
-                    }}>
-                    <svg ref={svgRef} id="oht-visualization" className="w-full h-full" onClick={(e) => setSelectedRail(null)}>
+                {isLoading && (
+                    <div className="absolute inset-0 flex justify-center items-center bg-gray-700 bg-opacity-80 z-10">
+                    <div className="w-16 h-16 border-4 border-gray-300 border-opacity-50 border-t-blue-500 border-t-4 rounded-full animate-spin"></div>
+                </div>
+                )}
+                <div className="w-full h-full" onClick={() => setSelectedRail(null)}>
+                    <svg ref={svgRef} id="oht-visualization" className="w-full h-full">
                         <g ref={gRef}></g>
                     </svg>
-                    <div id="tooltip" className="tooltip" style={{ position: 'absolute', visibility: 'hidden', background: '#fff', border: '1px solid #ccc', padding: '5px', borderRadius: '5px', pointerEvents: 'none', fontSize: '10px' }}></div>
+
+                    <div id="tooltip" 
+                        className="tooltip"
+                        style={{
+                            position: 'absolute', 
+                            visibility: 'hidden',
+                            background: darkMode ? '#1E293B' : '#fff',  // ✅ 다크모드 반영
+                            color: darkMode ? '#fff' : '#000',         // ✅ 텍스트 색상 변경
+                            border: `1px solid ${darkMode ? '#475569' : '#ccc'}`, // ✅ 테두리 색 변경
+                            padding: '5px', 
+                            borderRadius: '5px', 
+                            pointerEvents: 'none', 
+                            fontSize: '10px'
+                        }}>
+                    </div>
+
                     {selectedRail && (
                         <button
                             style={{
@@ -767,8 +830,8 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                                 ...computeButtonPosition(selectedRail.x, selectedRail.y),
                                 transform: 'translate(20%, 0%)',
                                 background: d3.selectAll('.rail')
-                                .filter(d => d === selectedRail.rail)
-                                .classed('removed') ? 'blue' : 'red',
+                                    .filter(d => d === selectedRail.rail)
+                                    .classed('removed') ? '#2563EB' : '#DC2626',
                                 color: 'white',
                                 border: 'none',
                                 borderRadius: '5px',
@@ -781,85 +844,175 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                                 modiRail();
                             }}
                         >
-                        {d3.selectAll('.rail')
-                            .filter(d => d === selectedRail.rail)
-                            .classed('removed') ? 'Restore Rail' : 'Remove Rail'}
+                            {d3.selectAll('.rail')
+                                .filter(d => d === selectedRail.rail)
+                                .classed('removed') ? 'Restore Rail' : 'Remove Rail'}
                         </button>
                     )}
                 </div>
             </main>
-            <footer className="flex gap-16 items-center p-4 bg-gray-800 text-white">
-                    <div className="flex gap-4">
-                        <div className="flex flex-row gap-4 justify-between items-center ">
-                        <label>
-                                <input
-                                    type="checkbox"
-                                    checked={isAccelEnabled}
-                                    onChange={handleAccelChange}
-                                    className="mr-2"
-                                />
-                                Enable Acceleration
-                            </label>
 
-                            {isAccelEnabled && (
-                                <input
-                                    ref={accTimeref}
-                                    type="number"
-                                    value={acceleratedTime}
-                                    onChange={handleTimeChange}
-                                    className="p-2 rounded border border-gray-300 focus:outline-none focus:ring focus:ring-blue-500 text-black w-28"
-                                    placeholder="Enter current time"
-                                />
-                            )}
+            {/* 푸터 컨트롤 UI */}
+            <footer className={`flex flex-col md:flex-row items-center justify-between p-6 ${darkMode ? "bg-[#1E293B]" : "bg-[#E2E8F0]"} shadow-lg`}>
+                <div className="flex flex-col md:flex-row gap-6 items-center">
+                    {/* ✅ OHT 모드 선택 */}
+                    <div className="flex flex-col items-center gap-4">
+                        <span className="text-sm font-semibold">OHT Mode</span>
+                        
+                        {/* 랜덤 모드 선택 */}
+                        <label className="flex items-center cursor-pointer">
+                            <input
+                                type="radio"
+                                name="ohtMode"
+                                value="random"
+                                checked={ohtMode === "random"}
+                                onChange={() => setOhtMode("random")}
+                                className="hidden"
+                            />
+                            <span className={`px-3 py-1 rounded-lg transition text-sm font-medium cursor-pointer
+                                ${ohtMode === "random" ? "bg-blue-600 text-white" : "bg-gray-300 dark:bg-gray-600 text-black dark:text-white"}
+                            `}>
+                                Random
+                            </span>
+                        </label>
 
-                            <label htmlFor="max-time-input" className="text-sm font-semibold mb-1">
-                                Max Time:
+                        {/* 파일 업로드 모드 선택 */}
+                        <label className="flex items-center cursor-pointer">
+                            <input
+                                type="radio"
+                                name="ohtMode"
+                                value="file"
+                                checked={ohtMode === "file"}
+                                onChange={() => setOhtMode("file")}
+                                className="hidden"
+                            />
+                            <span className={`px-3 py-1 rounded-lg transition text-sm font-medium cursor-pointer
+                                ${ohtMode === "file" ? "bg-blue-600 text-white" : "bg-gray-300 dark:bg-gray-600 text-black dark:text-white"}
+                            `}>
+                                File Upload
+                            </span>
+                        </label>
+                    </div>
+
+                    {/* ✅ 랜덤 모드에서만 OHT 개수 입력 가능 */}
+
+
+                    {/* ✅ 가속 활성화 */}
+                    <div className="flex items-center gap-3">
+                        <input
+                            type="checkbox"
+                            checked={isAccelEnabled}
+                            onChange={handleAccelChange}
+                            className="h-5 w-5 rounded border-gray-400 text-blue-600 focus:ring focus:ring-blue-400"
+                        />
+                        <label className="text-sm font-medium">Enable Acceleration</label>
+                    </div>
+
+                    {/* ✅ 가속 시간 입력 */}
+                    {isAccelEnabled && (
+                        <div className="flex flex-col items-center gap-3">
+                            <label htmlFor="accel-time-input" className="text-sm font-semibold">
+                                Acceleration Time
                             </label>
                             <input
-                                ref = {maxTimeref}
-                                id="max-time-input"
+                                ref={accTimeref}
+                                id="accel-time-input"
                                 type="number"
-                                value={maxTime}
-                                onChange={(e) => setMaxTime(Number(e.target.value))}
-                                className="p-2 rounded border border-gray-300 focus:outline-none focus:ring focus:ring-blue-500 text-black w-28"
+                                value={acceleratedTime}
+                                onChange={handleTimeChange}
+                                className={`p-2 rounded-md border ${darkMode ? "border-gray-600 bg-gray-700 text-white" : "border-gray-400 bg-white text-black"} 
+                                focus:outline-none focus:ring focus:ring-blue-500 w-32 text-center`}
+                                placeholder="Enter time"
                             />
                         </div>
-                    </div>
-                    <div className="flex items-center gap-4">
-                        <div className="flex flex-row gap-4 items-start">
-                            <input
-                                ref={jobFileInputRef}
-                                type="file"
-                                accept=".csv"
-                                onChange={handleFileChange}
-                                className="mt-2 text-sm"
-                            />
+                    )}
 
+                    {/* ✅ 최대 시간 입력 */}
+                    <div className="flex flex-col items-center gap-3">
+                        <label htmlFor="max-time-input" className="text-sm font-semibold">
+                            Max Time
+                        </label>
+                        <input
+                            ref={maxTimeref}
+                            id="max-time-input"
+                            type="number"
+                            value={maxTime}
+                            onChange={(e) => setMaxTime(Number(e.target.value))}
+                            className={`p-2 rounded-md border ${darkMode ? "border-gray-600 bg-gray-700 text-white" : "border-gray-400 bg-white text-black"} 
+                            focus:outline-none focus:ring focus:ring-blue-500 w-32 text-center`}
+                        />
+                    </div>
+                    
+                {ohtMode === "random" && (
+                        <div className="flex flex-col items-center gap-3">
+                            <label htmlFor="oht-count-input" className="text-sm font-semibold">
+                                Number of OHTs
+                            </label>
                             <input
-                                ref={OhtFileInputRef}
-                                type="file"
-                                accept=".csv"
-                                onChange={handleFileChange}
-                                className="mt-2 text-sm"
+                                id="oht-count-input"
+                                type="number"
+                                value={ohtCount}
+                                onChange={(e) => setOhtCount(Number(e.target.value))}
+                                className={`p-2 rounded-md border ${darkMode ? "border-gray-600 bg-gray-700 text-white" : "border-gray-400 bg-white text-black"} 
+                                focus:outline-none focus:ring focus:ring-blue-500 w-32 text-center`}
                             />
                         </div>
+                    )}
+                    
+ 
+                </div>
+
+                {/* ✅ 파일 업로드 UI (파일 모드에서만 표시) */}
+                {ohtMode === "file" && (
+                    <div className="flex flex-col md:flex-row gap-6 items-center mt-4">
+                        <div className="flex flex-col items-center">
+                            <label className={`flex flex-col items-center px-4 py-2 ${darkMode ? "bg-blue-700 hover:bg-blue-800" : "bg-blue-500 hover:bg-blue-600"} text-white rounded-lg shadow-md transition cursor-pointer`}>
+                                📂 Upload Job File
+                                <input ref={jobFileInputRef} type="file" accept=".csv" className="hidden" onChange={handleFileChange} />
+                            </label>
+                            {selectedJobFile ? (
+                                <p className="text-sm text-green-400 mt-2">{selectedJobFile.name}</p>
+                            ) : (
+                                <p className="text-sm text-gray-400 mt-2">No file selected</p>
+                            )}
+                        </div>
+                        <div className="flex flex-col items-center">
+                            <label className={`flex flex-col items-center px-4 py-2 ${darkMode ? "bg-blue-700 hover:bg-blue-800" : "bg-blue-500 hover:bg-blue-600"} text-white rounded-lg shadow-md transition cursor-pointer`}>
+                                📂 Upload OHT File
+                                <input ref={OhtFileInputRef} type="file" accept=".csv" className="hidden" onChange={handleFileChange} />
+                            </label>
+                            {selectedOhtFile ? (
+                                <p className="text-sm text-green-400 mt-2">{selectedOhtFile.name}</p>
+                            ) : (
+                                <p className="text-sm text-gray-400 mt-2">No file selected</p>
+                            )}
+                        </div>
                     </div>
-                    <div>
-                        <button className="p-2 bg-blue-500 text-white rounded hover:bg-blue-700" onClick={() => {
-                            if (!isRunning) {
-                                resetSimulation();
-                                startSimulation();
-                            }
-                            else {
-                                // resetSimulation();
-                                stopSimulation();
-                                resetSimulation();
-                            }
-                        }}>
-                            {isRunning ? 'Stop Simulation' : 'Start Simulation'}
-                        </button>
-                    </div>
+                )}
+
+                {/* ✅ 시뮬레이션 시작 / 정지 버튼 */}
+                <button
+                    className={`px-6 py-3 rounded-lg shadow-md transition text-white ${
+                        isRunning ? "bg-red-500 hover:bg-red-600" : "bg-green-500 hover:bg-green-600"
+                    }`}
+                    onClick={() => {
+                        if (!isRunning) {
+                            resetSimulation();
+                            startSimulation();
+                        } else {
+                            resetSimulation();
+                            stopSimulation();
+                            resetSimulation();
+                        }
+                    }}
+                >
+                    {isRunning ? "Stop Simulation" : "Start Simulation"}
+                </button>
             </footer>
+
+
+
+            {showModal && <Modal onClose={() => setShowModal(false)} />}
         </div>
     );
 };

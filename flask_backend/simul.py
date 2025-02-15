@@ -1,5 +1,4 @@
 #import libraries
-import networkx as nx
 import numpy as np
 import random
 import networkit as nk
@@ -17,7 +16,7 @@ def compress_data(data):
 #node 클래스
 class node():
     def __init__(self, id, coord):
-        #node id
+        #node 
         self.id = id
         #node 좌표 (2차원)
         self.coord = np.array(coord)
@@ -360,10 +359,14 @@ class AMHS:
         for node in nodes:
             node.OHT = None
         self.edges = edges  # edge 객체 리스트
+        
         for edge in edges:
             edge.OHTs = []
             edge.count = 0
             edge.avg_speed = edge.max_speed
+            edge.entry_exit_records = {} 
+            
+            
         self.ports = ports #port list
         for p in ports:
             p.edge = self.get_edge(p.from_node, p.to_node)
@@ -461,6 +464,9 @@ class AMHS:
         if oht_origin.edge:
             if oht_origin not in oht_origin.edge.OHTs:
                 oht_origin.edge.OHTs.append(oht_origin)
+        elif oht_origin.from_dist == 0:
+            oht_origin.from_node.OHT = oht_origin;
+                
         try:
             if not self.graph.hasEdge(self.node_id_map[oht_new['source']], self.node_id_map[oht_new['dest']]):
                 oht_origin.speed = 0
@@ -469,7 +475,7 @@ class AMHS:
                 oht_origin.cal_pos(self.time_step)
                 return
         except:
-            print('is here?', oht_new['source'])
+            pass
   
             
         oht_origin.speed = oht_new['speed']
@@ -635,25 +641,13 @@ class AMHS:
         try:
             source_idx = self.node_id_map[source_id]
             dest_idx = self.node_id_map[dest_id]
-            
-            # dijkstra = nk.distance.Dijkstra(self.graph, source_idx, storePaths=True, storeNodesSortedByDistance=False, target=dest_idx)
-            # dijkstra.run()
-            # dist = dijkstra.distance(dest_idx)
-            
+
             dist = self.apsp.getDistance(source_idx, dest_idx)      
             return dist
         except:
             try:
                 source_idx = self.node_id_map[source_id]
-                dest_idx = self.node_id_map[dest_id]
-                
-                
-                
-                # dijkstra = nk.distance.Dijkstra(self.original_graph, source_idx, storePaths=True, storeNodesSortedByDistance=False, target=dest_idx)
-                # dijkstra.run()
-
-                # dist = dijkstra.distance(dest_idx)
-            
+                dest_idx = self.node_id_map[dest_id]            
 
                 dist = self.original_apsp.getDistance(source_idx, dest_idx)                
                 return dist
@@ -721,7 +715,7 @@ class AMHS:
     
     
         
-    def start_simulation(self, socketio, current_time, max_time = 4000, time_step = 0.01):
+    def start_simulation(self, socketio, current_time, max_time = 4000, time_step = 0.1):
         """시뮬레이션 시작"""        
         if self.simulation_running:
             print("Simulation is already running. Stopping the current simulation...")
@@ -754,7 +748,7 @@ class AMHS:
             for oht in self.OHTs:
                 oht.cal_pos(time_step)
 
-            if count % 5 == 0:
+            if count % 1 == 0:
                 for oht in self.OHTs:
                     oht_positions.append({
                         'id': oht.id,
@@ -772,6 +766,7 @@ class AMHS:
                     })
 
                 updated_edges = []
+                
                 for edge in self.edges:
                     key = f"{edge.source.id}-{edge.dest.id}"
                     new_metrics = {"count": edge.count, "avg_speed": edge.avg_speed}
@@ -795,7 +790,7 @@ class AMHS:
             # Increment time
             current_time += time_step
             count += 1
-            socketio.sleep(0.00001)
+            # socketio.sleep(0.00001)
 
         self.simulation_running = False
         print('Simulation ended')
@@ -825,12 +820,7 @@ class AMHS:
             if count % 5 == 0:
                 self.generate_job()
                 self.assign_jobs()
-            
-            if count % 10 == 0:
-                print(_current_time)
 
-            # Move all OHTs
-            
             for oht in self.OHTs:
                 oht.move(time_step, _current_time)
 
@@ -865,7 +855,7 @@ class AMHS:
             for oht in self.OHTs:
                 oht.cal_pos(time_step)
 
-            if count % 5 == 0:
+            if count % 1 == 0:
                 for oht in self.OHTs:
                     oht_positions.append({
                         'id': oht.id,

@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  frontend:
+    build: ./
+    ports:
+      - "3001:3000"
+    depends_on:
+      - backend
+    networks:
+      - oht_network
+    volumes:
+      - ./:/app
+
+  backend:
+    build: ./flask_backend
+    ports:
+      - "5000:5000"
+    expose:
+      - "5000"  # 내부 네트워크에서만 접근 가능
+    environment:
+      - DATABASE_URL=postgresql://postgres:password@db:5432/oht_simulation
+      - FLASK_ENV=development  # ✅ 개발 모드로 설정 (자동 리로드 가능)
+    depends_on:
+      - db
+    networks:
+      - oht_network
+    volumes:
+      - ./flask_backend:/app
+
+  db:
+    image: postgres:latest
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: oht_simulation
+    volumes:
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - oht_network
+
+networks:
+  oht_network:
+    driver: bridge

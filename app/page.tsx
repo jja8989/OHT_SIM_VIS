@@ -32,7 +32,7 @@ interface LayoutData {
     ports: Port[];
 }
 
-const socket = io('http://localhost:5001'); // 소켓 서버 주소
+const socket = io('http://localhost:5000'); // 소켓 서버 주소
 
 
 export default function Home() {
