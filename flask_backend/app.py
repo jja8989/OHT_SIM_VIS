@@ -314,10 +314,6 @@ def save_edge_data():
 
                 last_saved_time += 10
         
-        # print("🔴 Stopping edge data saving...")  # 디버깅용 출력
-        print(amhs is not None)
-        print(amhs.simulation_running)
-        print(stop_saving_event.is_set())
         break  # ✅ 루프 탈출
 
 def save_edge_data_back():
@@ -370,9 +366,6 @@ def save_edge_data_back():
                 last_saved_time_back += 10
 
         print("🛑 Exiting save loop")
-        print(back_amhs is not None)
-        print(back_amhs.back_simulation_running)
-        print(stop_saving_back_event.is_set())
         break  # ✅ 루프 탈출
 
 

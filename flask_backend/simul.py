@@ -202,10 +202,7 @@ class OHT():
                 elif self.status == 'STOP_AT_END':
                     self.status = 'IDLE'
             return  # 대기 중이므로 이동하지 않음
-        
-        #충돌 감지
-        self.col_check(time_step)
-        
+
         #만약 도착했다면 멈추기 
         if self.is_arrived():
             self.arrive()
@@ -213,6 +210,9 @@ class OHT():
         
         from_node = self.node_map[self.from_node]
         edge = self.edge_map[self.edge]
+        
+                    
+        self.col_check(time_step)
             
         #From_dist가 edge의 length보다 길어지면 다음 엣지로 업데이트    
         while (self.from_dist > edge.length):
@@ -253,7 +253,7 @@ class OHT():
                         self.acc = 0
                         self.from_dist = edge.length
                         self.from_node = edge.source
-                        self.status = 'ON_REMOVED'
+                        # self.status = 'ON_REMOVED'
                         return
                 except:
                     print('update error : ', self.edge)
@@ -267,7 +267,8 @@ class OHT():
         if self.is_arrived():
             self.arrive()
             return
-            
+
+
         #가속도 고려해서 스피드 계산
         self.speed = min(max(self.speed + self.acc * time_step, 0), edge.max_speed)
         
@@ -335,6 +336,11 @@ class OHT():
         edge = self.edge_map[self.edge]
 
         OHTs = edge.OHTs
+        
+        if len(self.path)==0 and self.from_dist == edge.length:
+            self.speed = 0
+            self.acc = 0
+            return
                 
         if len(OHTs) > 1:
             # 현재 OHT의 인덱스 찾기
@@ -408,6 +414,7 @@ class OHT():
                         return
                 except:
                     pass
+
         
         #충돌 위험이 없다면 다시 원래 max speed로 가속
         self.acc = (edge.max_speed - self.speed) / time_step
@@ -529,7 +536,7 @@ class AMHS:
                 from_dist=0,
                 speed=0,
                 acc=0,
-                rect=1000,  # 충돌 판정 거리
+                rect=3000,  # 충돌 판정 거리
                 path=[],
                 node_map = self.node_map,
                 edge_map = self.edge_map,

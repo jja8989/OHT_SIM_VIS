@@ -350,7 +350,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                         .attr("class", "oht")
                         .attr("cx", yScale(updatedOHT.x))
                         .attr("cy", yScale(updatedOHT.y))
-                        .attr("r", 3)
+                        .attr("r", 5)
                         .attr("fill", getColorByStatus(updatedOHT.status));
 
                         pendingOHTTransitions--;                      
@@ -455,11 +455,6 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         d3.selectAll(".port")
             .transition().duration(500)
             .attr("fill", colors.port);
-    
-        // OHT 색상 업데이트
-        d3.selectAll(".oht")
-            .transition().duration(500)
-            .attr("fill", d => colors.oht(d.status));
     };
     
 
