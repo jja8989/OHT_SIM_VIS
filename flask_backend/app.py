@@ -6,8 +6,8 @@ import json
 import time
 import threading
 import math
-# from simul import *
-from simul_parallel import *
+from simul import *
+# from simul_parallel import *
 import psycopg2
 from datetime import datetime
 import time
@@ -20,7 +20,11 @@ DATABASE_URL = "postgresql://postgres:password@db:5432/oht_simulation"
 
 
 current_simulation_id = None  # 현재 실행 중인 시뮬레이션 ID
-last_saved_time = 0
+last_saved_time = -10
+last_saved_time_back = -10
+
+# 백엔드 전용 시뮬레이션 ID
+back_simulation_id = None  
 
 
 def get_db_connection():
@@ -71,6 +75,9 @@ def create_simulation_table(simulation_id):
 def clear_future_edge_data(simulation_id, simulation_time):
     """현재 simulation time (float, 초 단위)을 HH:MM:SS 형식으로 변환 후 이후 데이터 삭제"""
     formatted_time = format_simulation_time(simulation_time)  # ✅ HH:MM:SS 변환
+    
+    global last_saved_time
+
 
     conn = get_db_connection()
     cur = conn.cursor()
@@ -78,10 +85,27 @@ def clear_future_edge_data(simulation_id, simulation_time):
     cur.execute(f"""
         DELETE FROM simulation_{simulation_id} WHERE time >= %s;
     """, (formatted_time,))  # Simulation Time 이후 데이터 삭제
+    
+    cur.execute(f"""
+        SELECT time FROM simulation_{simulation_id} ORDER BY time DESC LIMIT 1;
+    """)
+    last_row = cur.fetchone()
+
+    # ✅ last_saved_time 업데이트
+    if last_row:
+        last_saved_time = parse_simulation_time(last_row[0])  # HH:MM:SS → 초 변환
+    else:
+        last_saved_time = simulation_time  # 모든 데이터가 삭제되었다면 현재 시간 유지
 
     conn.commit()
     cur.close()
     conn.close()
+    
+def parse_simulation_time(time_str):
+    """HH:MM:SS 형식의 문자열을 초 단위 float으로 변환"""
+    h, m, s = map(int, time_str.split(':'))
+    return h * 3600 + m * 60 + s
+
     
 def format_simulation_time(sim_time):
     """✅ 시뮬레이션 시간을 HH:MM:SS 형태로 변환"""
@@ -90,6 +114,8 @@ def format_simulation_time(sim_time):
     return f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}"
 
 stop_saving_event = threading.Event()
+stop_saving_back_event = threading.Event()
+
 
 
 
@@ -134,17 +160,6 @@ ports = [
     for p in layout_data['ports']
 ]
 
-
-# ports = [
-#     port(
-#         name = p['name'], 
-#         from_node = next((node for node in nodes if node.id == p['from_node'])),
-#         to_node = next((node for node in nodes if node.id == p['to_node'])),
-#         from_dist = p['distance']
-#     )
-#     for p in layout_data['ports']
-# ]
-
 global job_list
 global oht_list
 oht_list = []
@@ -160,7 +175,6 @@ def handle_get_simulation_tables():
     cur.execute("""
         SELECT table_name FROM information_schema.tables
         WHERE table_name LIKE 'simulation_%'
-        ORDER BY table_name DESC;
     """)
 
     tables = [row[0] for row in cur.fetchall()]
@@ -243,6 +257,7 @@ def handle_file_upload(data):
     socketio.emit('filesProcessed', {"message": "Files successfully uploaded"})
 
 amhs = None
+back_amhs = None
 
 def run_simulation(max_time):
     global amhs
@@ -271,6 +286,9 @@ def save_edge_data():
     if amhs is None:
         # print("❌ amhs was not initialized within the timeout period.")
         return
+    
+    stop_saving_event.clear()  # 🔥 중지 이벤트 초기화
+
 
     while current_simulation_id:
         while amhs is not None and amhs.simulation_running and not stop_saving_event.is_set():  # ✅ amhs가 None인지 체크
@@ -278,7 +296,7 @@ def save_edge_data():
                 conn = get_db_connection()
                 cur = conn.cursor()
 
-                sim_time_str = format_simulation_time(last_saved_time)
+                sim_time_str = format_simulation_time(last_saved_time+10)
 
                 edge_data = [(sim_time_str, edge.id, edge.avg_speed) for edge in amhs.edges]
 
@@ -297,8 +315,65 @@ def save_edge_data():
                 last_saved_time += 10
         
         # print("🔴 Stopping edge data saving...")  # 디버깅용 출력
+        print(amhs is not None)
+        print(amhs.simulation_running)
+        print(stop_saving_event.is_set())
         break  # ✅ 루프 탈출
 
+def save_edge_data_back():
+    """백엔드 전용 시뮬레이션 데이터를 DB에 저장"""
+    global back_simulation_id, last_saved_time_back, back_amhs
+
+    if back_simulation_id is None:
+        print("❌ No valid back_simulation_id, skipping data save!")
+        return
+
+    max_wait_time = 10  # 최대 대기 시간 (초)
+    waited_time = 0
+    while back_amhs is None and waited_time < max_wait_time:
+        print(f"⏳ Waiting for back_amhs... ({waited_time}s)")
+        time.sleep(1)
+        waited_time += 1
+
+    if back_amhs is None:
+        print("❌ back_amhs is still None after waiting, skipping data save!")
+        return
+
+    print("✅ back_amhs initialized, starting data save...")
+    
+    stop_saving_back_event.clear()
+
+    while back_simulation_id:
+        while back_amhs is not None and back_amhs.back_simulation_running and not stop_saving_back_event.is_set():
+            if back_amhs.current_time - last_saved_time_back >= 10:
+                print(f"📌 Saving data at time: {last_saved_time_back} (back_amhs.current_time={back_amhs.current_time})")
+
+                conn = get_db_connection()
+                cur = conn.cursor()
+
+                sim_time_str = format_simulation_time(last_saved_time_back+10)
+
+                edge_data = [(sim_time_str, edge.id, edge.avg_speed) for edge in back_amhs.edges]
+
+                cur.executemany(f"""
+                    INSERT INTO simulation_{back_simulation_id} (time, edge_id, avg_speed) 
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (time, edge_id) DO UPDATE SET avg_speed = EXCLUDED.avg_speed;
+                """, edge_data)
+
+                conn.commit()
+                cur.close()
+                conn.close()
+
+                print(f"✅ Data saved to simulation_{back_simulation_id} at {sim_time_str}")
+
+                last_saved_time_back += 10
+
+        print("🛑 Exiting save loop")
+        print(back_amhs is not None)
+        print(back_amhs.back_simulation_running)
+        print(stop_saving_back_event.is_set())
+        break  # ✅ 루프 탈출
 
 
     
@@ -311,14 +386,25 @@ def accel_simulation(current_time, max_time):
     amhs = AMHS(nodes=nodes, edges=edges, ports=ports, num_OHTs=num_oht, max_jobs=1000, job_list = job_list, oht_list = oht_list)
     amhs.accelerate_simul(socketio, current_time, max_time)
     
+def only_simulation(max_time):
+    global back_amhs
+    global job_list
+    global oht_list
+    global num_oht
+    
+    back_amhs = AMHS(nodes=nodes, edges=edges, ports=ports, num_OHTs=num_oht, max_jobs=1000, job_list = job_list, oht_list = oht_list)
+    back_amhs.only_simulation(socketio, 0, max_time)
+    
     
 @socketio.on('startSimulation')
 def start_simulation(data):
     global max_time
     global num_oht
+    global amhs
     max_time = data.get('max_time', 4000)
     current_time = data.get('current_time', None)
     num_oht = data.get('num_OHTs', 500)
+    amhs = None
 
     if not current_time:
         socketio.start_background_task(run_simulation, max_time)
@@ -327,7 +413,7 @@ def start_simulation(data):
         
     global current_simulation_id
     global last_saved_time
-    last_saved_time = 0
+    last_saved_time = -10
     conn = get_db_connection()
     cur = conn.cursor()
     
@@ -342,7 +428,41 @@ def start_simulation(data):
     cur.close()
     conn.close()
 
-    socketio.start_background_task(save_edge_data) 
+    socketio.start_background_task(save_edge_data)
+    
+
+@socketio.on('onlySimulation')
+def start_only_simulation(data):
+    global max_time
+    global num_oht
+    global back_amhs
+    
+    back_amhs = None
+
+    max_time = data.get('max_time', 4000)
+    current_time = data.get('current_time', None)
+    num_oht = data.get('num_OHTs', 500)
+
+    socketio.start_background_task(only_simulation, max_time)
+        
+    global back_simulation_id
+    global last_saved_time_back
+    last_saved_time_back = -10
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    cur.execute("INSERT INTO simulation_metadata (description, start_time) VALUES (%s, %s) RETURNING simulation_id;", 
+                ("New simulation started", datetime.now()))
+    back_simulation_id = cur.fetchone()[0]
+    conn.commit()
+
+    # 새로운 시뮬레이션을 위한 테이블 생성
+    create_simulation_table(back_simulation_id)
+
+    cur.close()
+    conn.close()
+
+    socketio.start_background_task(save_edge_data_back) 
     
     
 @socketio.on('stopSimulation')
@@ -351,20 +471,25 @@ def stop_simulation():
     amhs.stop_simulation_event.set()  # Signal all running processes to stop
     stop_saving_event.set()  # 🔥 DB 저장 중단
     socketio.emit('simulationStopped')  # Notify the frontend that the simulation has stopped
+    
+@socketio.on('stopBackSimulation')
+def stop_Back_simulation():
+    global back_amhs
+    back_amhs.back_stop_simulation_event.set()  # Signal all running processes to stop
+    stop_saving_back_event.set()  # 🔥 DB 저장 중단
+    socketio.emit('simulationBackStopped')  # Notify the frontend that the simulation has stopped
 
 @socketio.on('modiRail')
 def handle_rail_update(data):    
     global amhs
     global current_simulation_id
+    global last_saved_time
 
     removed_rail_key = data['removedRailKey']
     oht_positions = data['ohtPositions']
     is_removed = data['isRemoved']
     current_time = data['currentTime']  # currentTime 추가
     edge_data = data['edges']
-    
-    print('????')
-
     
     amhs.simulation_running = False
     amhs.stop_simulation_event.set()
@@ -385,13 +510,12 @@ def handle_rail_update(data):
     amhs.reinitialize_simul(oht_positions, edge_data)
     
         # DB에서 현재 simulation time 이후 데이터 삭제
-    # if current_simulation_id:
-    #     clear_future_edge_data(current_simulation_id, current_time)
+    if current_simulation_id:
+        clear_future_edge_data(current_simulation_id, current_time)
     
-    print('????')
     
     socketio.start_background_task(restart_simulation, amhs, current_time)
-    # socketio.start_background_task(save_edge_data) 
+    socketio.start_background_task(save_edge_data) 
 
 
 def restart_simulation(amhs, current_time):

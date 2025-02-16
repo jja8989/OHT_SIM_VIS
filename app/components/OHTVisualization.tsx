@@ -76,6 +76,9 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     const [isAccelEnabled, setIsAccelEnabled] = useState(false);  // 가속 실험 여부
 
     const [isRunning, setIsRunning] = useState(false);
+    const [isRunningBack, setIsRunningBack] = useState(false);
+
+
     const svgRef = useRef<SVGSVGElement | null>(null);
     const gRef = useRef<SVGGElement | null>(null);
     const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
@@ -402,6 +405,11 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         
         socket.on('updateOHT', handleOHTUpdate);
 
+        socket.on("backSimulationFinished", () => {
+            setIsRunningBack(false);
+        });
+    
+
         // rafId.current = requestAnimationFrame(processTimeStep);
 
         return () => {
@@ -616,6 +624,50 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     
     };
 
+    const startBackSimulation = () => {
+        // resetSimulation(); // Reset the state before starting
+        console.log('Starting simulation');
+        setIsRunningBack(true);
+
+        const formData = new FormData();
+
+        formData.append('oht_file', selectedOhtFile);
+        formData.append('job_file', selectedJobFile);
+
+        socket.emit('uploadFiles', formData);  // 소켓을 통해 파일 전송
+
+        socket.on('filesProcessed', (data) => {
+            console.log('Files successfully uploaded:', data);
+
+            maxTimeref.current.value = maxTime;
+            
+            const simulationData = { max_time: maxTime, num_OHTs: ohtCount };
+            if (isAccelEnabled) {
+                simulationData.current_time = acceleratedTime;  // current_time을 추가
+            }
+            socket.emit('onlySimulation', simulationData);  // 시뮬레이션 시작 요청
+    
+            setIsRunningBack(true);
+
+            setSelectedJobFile(null);
+            setSelectedOhtFile(null); // Reset the file input when starting the simulation
+            if (jobFileInputRef.current) {
+                jobFileInputRef.current.value = "";
+            }
+            
+            if (OhtFileInputRef.current) {
+                OhtFileInputRef.current.value = "";
+            }
+
+            if (!rafId.current) {
+                rafId.current = requestAnimationFrame(processTimeStepRef.current);
+            }
+
+            socket.off('filesProcessed');
+        });
+    
+    };
+
     const resetSimulation = () => {
         console.log('Resetting simulation');
 
@@ -712,6 +764,20 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
             socket.disconnect();
             socket.connect();
+        });
+
+    };
+
+
+    const stopBackSimulation = () => {
+        socket.emit('stopBackSimulation');
+
+        setIsRunningBack(false);
+
+
+        socket.on('simulationBackStopped', () => {
+            setIsRunningBack(false);
+            socket.off('simulationBackStopped');
         });
 
     };
@@ -853,7 +919,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             </main>
 
             {/* 푸터 컨트롤 UI */}
-            <footer className={`flex flex-col md:flex-row items-center justify-between p-6 ${darkMode ? "bg-[#1E293B]" : "bg-[#E2E8F0]"} shadow-lg`}>
+            <footer className={`flex flex-col md:flex-row items-center justify-between p-4 ${darkMode ? "bg-[#1E293B]" : "bg-[#E2E8F0]"} shadow-lg`}>
                 <div className="flex flex-col md:flex-row gap-6 items-center">
                     {/* ✅ OHT 모드 선택 */}
                     <div className="flex flex-col items-center gap-4">
@@ -990,6 +1056,22 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                     </div>
                 )}
 
+                <div className="flex flex-col md:flex-row gap-6 items-center mt-4">
+                {/* ✅ 시뮬레이션 시작 / 정지 버튼 */}
+                <button
+                    className={`px-6 py-3 rounded-lg shadow-md transition text-white ${
+                        isRunningBack ? "bg-red-500 hover:bg-red-600" : "bg-green-500 hover:bg-green-600"
+                    }`}
+                    onClick={() => {
+                        if (!isRunningBack) {
+                            startBackSimulation();
+                        } else {
+                            stopBackSimulation();
+                        }
+                    }}
+                >
+                    {isRunningBack ? "Stop Simulation Only" : "Start Simulation Only"}
+                </button>
                 {/* ✅ 시뮬레이션 시작 / 정지 버튼 */}
                 <button
                     className={`px-6 py-3 rounded-lg shadow-md transition text-white ${
@@ -1008,6 +1090,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                 >
                     {isRunning ? "Stop Simulation" : "Start Simulation"}
                 </button>
+                </div>
             </footer>
 
 

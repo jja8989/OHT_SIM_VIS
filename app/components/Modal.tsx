@@ -16,7 +16,13 @@ const Modal: React.FC<ModalProps> = ({ onClose }) => {
         socket.emit('get_simulation_tables');
 
         socket.on('simulation_tables', (data) => {
-            setSimulationTables(data.tables);
+            const sortedTables = data.tables.sort((a, b) => {
+                const numA = parseInt(a.replace("simulation_", ""), 10);
+                const numB = parseInt(b.replace("simulation_", ""), 10);
+                return numB - numA;  // ✅ 숫자가 큰(최신) 테이블이 위로
+            });
+
+            setSimulationTables(sortedTables);
         });
 
         return () => {
