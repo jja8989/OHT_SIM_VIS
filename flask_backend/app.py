@@ -78,7 +78,6 @@ def clear_future_edge_data(simulation_id, simulation_time):
     
     global last_saved_time
 
-
     conn = get_db_connection()
     cur = conn.cursor()
 
@@ -273,8 +272,7 @@ def save_edge_data():
     global current_simulation_id
     global last_saved_time
     global amhs  # ✅ 전역 변수 선언
-
-    # ✅ `amhs`가 초기화될 때까지 대기 (최대 10초 대기)
+    
     max_wait_time = 10  # 최대 대기 시간 (초)
     waited_time = 0
     while amhs is None and waited_time < max_wait_time:
@@ -282,9 +280,7 @@ def save_edge_data():
         time.sleep(1)  # 1초 대기
         waited_time += 1
 
-    # ✅ `amhs`가 끝까지 None이면 종료
     if amhs is None:
-        # print("❌ amhs was not initialized within the timeout period.")
         return
     
     stop_saving_event.clear()  # 🔥 중지 이벤트 초기화
@@ -292,27 +288,26 @@ def save_edge_data():
 
     while current_simulation_id:
         while amhs is not None and amhs.simulation_running and not stop_saving_event.is_set():  # ✅ amhs가 None인지 체크
-            if amhs.current_time - last_saved_time >= 10:
-                conn = get_db_connection()
-                cur = conn.cursor()
+            if not amhs.queue.empty():
+                edge_data = amhs.queue.get()
+                if edge_data:
+                    conn = get_db_connection()
+                    cur = conn.cursor()
 
-                sim_time_str = format_simulation_time(last_saved_time+10)
+                    # ✅ 시간 포맷팅 (초 → HH:MM:SS 변환)
+                    formatted_data = [
+                        (format_simulation_time(row[0]), row[1], row[2]) for row in edge_data
+                    ]
 
-                edge_data = [(sim_time_str, edge.id, edge.avg_speed) for edge in amhs.edges]
+                    cur.executemany(f"""
+                        INSERT INTO simulation_{current_simulation_id} (time, edge_id, avg_speed) 
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (time, edge_id) DO UPDATE SET avg_speed = EXCLUDED.avg_speed;
+                    """, formatted_data)
 
-                cur.executemany(f"""
-                    INSERT INTO simulation_{current_simulation_id} (time, edge_id, avg_speed) 
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (time, edge_id) DO UPDATE SET avg_speed = EXCLUDED.avg_speed;
-                """, edge_data)
-
-                conn.commit()
-                cur.close()
-                conn.close()
-                
-                # print('✅ Data added to DB')
-
-                last_saved_time += 10
+                    conn.commit()
+                    cur.close()
+                    conn.close()
         
         break  # ✅ 루프 탈출
 
@@ -321,51 +316,43 @@ def save_edge_data_back():
     global back_simulation_id, last_saved_time_back, back_amhs
 
     if back_simulation_id is None:
-        print("❌ No valid back_simulation_id, skipping data save!")
         return
 
     max_wait_time = 10  # 최대 대기 시간 (초)
     waited_time = 0
     while back_amhs is None and waited_time < max_wait_time:
-        print(f"⏳ Waiting for back_amhs... ({waited_time}s)")
         time.sleep(1)
         waited_time += 1
 
     if back_amhs is None:
-        print("❌ back_amhs is still None after waiting, skipping data save!")
         return
-
-    print("✅ back_amhs initialized, starting data save...")
     
     stop_saving_back_event.clear()
 
     while back_simulation_id:
-        while back_amhs is not None and back_amhs.back_simulation_running and not stop_saving_back_event.is_set():
-            if back_amhs.current_time - last_saved_time_back >= 10:
-                print(f"📌 Saving data at time: {last_saved_time_back} (back_amhs.current_time={back_amhs.current_time})")
+        while back_amhs is not None and back_amhs.back_simulation_running and not stop_saving_back_event.is_set():            
+            if not back_amhs.back_queue.empty():
+                edge_data = back_amhs.back_queue.get()
+                if edge_data:
+                    conn = get_db_connection()
+                    cur = conn.cursor()
 
-                conn = get_db_connection()
-                cur = conn.cursor()
+                    # ✅ 시간 포맷팅 (초 → HH:MM:SS 변환)
+                    formatted_data = [
+                        (format_simulation_time(row[0]), row[1], row[2]) for row in edge_data
+                    ]
 
-                sim_time_str = format_simulation_time(last_saved_time_back+10)
+                    cur.executemany(f"""
+                        INSERT INTO simulation_{back_simulation_id} (time, edge_id, avg_speed) 
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (time, edge_id) DO UPDATE SET avg_speed = EXCLUDED.avg_speed;
+                    """, formatted_data)
 
-                edge_data = [(sim_time_str, edge.id, edge.avg_speed) for edge in back_amhs.edges]
-
-                cur.executemany(f"""
-                    INSERT INTO simulation_{back_simulation_id} (time, edge_id, avg_speed) 
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (time, edge_id) DO UPDATE SET avg_speed = EXCLUDED.avg_speed;
-                """, edge_data)
-
-                conn.commit()
-                cur.close()
-                conn.close()
-
-                print(f"✅ Data saved to simulation_{back_simulation_id} at {sim_time_str}")
-
-                last_saved_time_back += 10
-
-        print("🛑 Exiting save loop")
+                    conn.commit()
+                    cur.close()
+                    conn.close()
+                
+            time.sleep(0.5)    
         break  # ✅ 루프 탈출
 
 

@@ -8,6 +8,8 @@ import base64
 import math
 import multiprocessing
 import copy
+from queue import Queue
+
 
 
 def compress_data(data):
@@ -502,6 +504,9 @@ class AMHS:
         self.original_apsp = nk.distance.APSP(self.original_graph)
         self.original_apsp.run()
         
+        self.queue = Queue()
+        self.back_queue = Queue()
+        
 
 
     def _create_graph(self):
@@ -854,6 +859,8 @@ class AMHS:
         
         count = 0
         edge_metrics_cache = {}  # Cache for edge metrics to track changes
+        
+        last_saved_time = -10
 
         while current_time < max_time:
             if self.stop_simulation_event.is_set():
@@ -876,6 +883,11 @@ class AMHS:
             
             for oht in self.OHTs:
                 oht.cal_pos(time_step)
+                
+            if current_time - last_saved_time > 10:
+                edge_data = [(last_saved_time+10, edge.id, edge.avg_speed) for edge in self.edges]
+                self.queue.put(edge_data)
+                last_saved_time += 10
                 
             if count % 1 == 0:
                 for oht in self.OHTs:
@@ -942,6 +954,9 @@ class AMHS:
         count = 0
         
         accel_factor = 10
+        
+        last_saved_time = -10
+
 
         while _current_time < current_time:
             if self.stop_simulation_event.is_set():
@@ -960,6 +975,11 @@ class AMHS:
             
             for oht in self.OHTs:
                 oht.cal_pos(time_step)
+
+            if _current_time - last_saved_time > 10:
+                edge_data = [(last_saved_time+10, edge.id, edge.avg_speed) for edge in self.edges]
+                self.queue.put(edge_data)
+                last_saved_time += 10
                 
             self.current_time = _current_time
 
@@ -990,6 +1010,12 @@ class AMHS:
             
             for oht in self.OHTs:
                 oht.cal_pos(time_step)
+                
+            
+            if _current_time - last_saved_time > 10:
+                edge_data = [(last_saved_time+10, edge.id, edge.avg_speed) for edge in self.edges]
+                self.queue.put(edge_data)
+                last_saved_time += 10
 
             if count % 1 == 0:
                 for oht in self.OHTs:
@@ -1046,11 +1072,12 @@ class AMHS:
             while self.back_simulation_running:
                 socketio.sleep(0.01)  # Wait for the current simulation to stop
             return
-        
-        print('only simulationr on running')
-        
+                
         self.back_simulation_running = True
         self.back_stop_simulation_event.clear()
+        
+        last_saved_time = -10
+
         
         count = 0
 
@@ -1075,6 +1102,11 @@ class AMHS:
             
             for oht in self.OHTs:
                 oht.cal_pos(time_step)
+                
+            if current_time - last_saved_time > 10:
+                edge_data = [(last_saved_time+10, edge.id, edge.avg_speed) for edge in self.edges]
+                self.back_queue.put(edge_data)
+                last_saved_time += 10
     
             # Increment time
             current_time += time_step

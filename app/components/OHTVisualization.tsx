@@ -447,9 +447,10 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             .attr("fill", colors.node);
     
         // Rail 색상 업데이트
-        d3.selectAll(".rail")
+        d3.selectAll(".rail:not(.removed)")
             .transition().duration(500)
             .attr("stroke", d => colors.rail(d));
+
     
         // Port 색상 업데이트
         d3.selectAll(".port")
