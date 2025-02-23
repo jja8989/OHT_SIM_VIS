@@ -4,13 +4,14 @@ services:
   frontend:
     build: ./
     ports:
-      - "3000:3000"
+      - "3001:3000"
     depends_on:
       - backend
     networks:
       - oht_network
-    volumes:
-      - ./:/app
+    # volumes:
+      # - ./:/app
+      # - /app/node_modules  # node_modules를 공유하지 않음
 
   backend:
     build: ./flask_backend

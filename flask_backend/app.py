@@ -16,12 +16,9 @@ import time
 import pandas as pd
 import io
 
-DATABASE_URL = "postgresql://postgres:password@db:5432/oht_simulation"
-
+from config import DATABASE_URL
 
 current_simulation_id = None  # 현재 실행 중인 시뮬레이션 ID
-last_saved_time = -10
-last_saved_time_back = -10
 
 # 백엔드 전용 시뮬레이션 ID
 back_simulation_id = None  

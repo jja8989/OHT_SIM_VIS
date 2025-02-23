@@ -50,12 +50,19 @@ interface OHTVisualizationProps {
 }
 
         // Color scale for rail counts
-const colorScale = d3.scaleLinear()
-            .domain([0, 1])
-            .range([
-                '#0000ff',
-                '#ff0000'
-                ]);
+// const colorScale = d3.scaleLinear()
+//             .domain([0, 1])
+//             .range([
+//                 '#0000ff',
+//                 '#ff0000'
+//                 ]);
+
+const colorScale = d3.scaleLinear<string, string>()
+    .domain([0, 1])
+    .range([
+        '#0000ff', // Blue
+        '#ff0000'  // Red
+    ]);
 
 const decompressData = (compressedData: string) => {
     try {

@@ -4,15 +4,14 @@ FROM node:21.2.0-alpine
 # Set working directory
 WORKDIR /app
 
-# Install dependencies
+# # Install dependencies
 COPY ./package.json ./package-lock.json ./
 RUN npm install --include=dev
 
-# Copy application code
+# # Copy application code
 COPY . .
-
-# Expose the Next.js server port
+# # Expose the Next.js server port
 EXPOSE 3000
 
-# Run the Next.js app
+# # Run the Next.js app
 CMD ["npm", "run", "dev"]
