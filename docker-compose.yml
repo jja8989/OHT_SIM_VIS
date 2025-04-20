@@ -3,25 +3,27 @@ version: '3.8'
 services:
   frontend:
     build: ./
-    ports:
-      - "3001:3000"
+    # ports:
+    #   - "3000:3000"
+    expose:
+      - "3000"
     depends_on:
       - backend
     networks:
       - oht_network
-    # volumes:
-      # - ./:/app
-      # - /app/node_modules  # node_modules를 공유하지 않음
 
   backend:
     build: ./flask_backend
     ports:
-      - "5000:5000"
+      - "127.0.0.1:5000:5000"
     expose:
-      - "5000"  # 내부 네트워크에서만 접근 가능
-    environment:
-      - DATABASE_URL=postgresql://postgres:password@db:5432/oht_simulation
-      - FLASK_ENV=development  # ✅ 개발 모드로 설정 (자동 리로드 가능)
+      - "5000"
+    # environment:
+    #   - DATABASE_URL=postgresql://postgres:password@db:5432/oht_simulation
+    #   - FLASK_ENV=production
+
+    env_file:
+      - .env
     depends_on:
       - db
     networks:
@@ -32,14 +34,35 @@ services:
   db:
     image: postgres:latest
     restart: always
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: oht_simulation
+    # environment:
+    #   POSTGRES_USER: postgres
+    #   POSTGRES_PASSWORD: password
+    #   POSTGRES_DB: oht_simulation
+
+    # ports:
+    #   - "127.0.0.1:5432:5432"
+
+    expose:
+     - "5432"
+    
+    env_file:
+      - .env
+    
     volumes:
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - oht_network
+
+  nginx:
+    build: ./nginx
+    ports:
+      - "80:80"
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - oht_network
+
 
 networks:
   oht_network:
