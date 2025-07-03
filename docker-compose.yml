@@ -21,7 +21,7 @@ services:
     # environment:
     #   - DATABASE_URL=postgresql://postgres:password@db:5432/oht_simulation
     #   - FLASK_ENV=production
-
+    restart: always
     env_file:
       - .env
     depends_on:

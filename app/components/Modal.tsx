@@ -1,7 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import io from 'socket.io-client';
+import { getClientId } from '../utils/getClientId';
 
-const socket = io('http://localhost:5000');
+const client_id = getClientId();
+
+// const socket = io('http://localhost:5000');
+const socket = io('/', {
+    path: '/socket.io',
+    transports: ['websocket'],
+    query: {
+        client_id: client_id,
+      }
+  });
 
 interface ModalProps {
     onClose: () => void;

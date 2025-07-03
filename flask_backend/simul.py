@@ -10,6 +10,10 @@ import multiprocessing
 import copy
 from queue import Queue
 
+import time
+random.seed(time.time())
+
+
 
 
 def compress_data(data):
@@ -845,7 +849,7 @@ class AMHS:
         return valid_path
     
         
-    def start_simulation(self, socketio, current_time, max_time = 4000, time_step = 0.1):
+    def start_simulation(self, socketio, sid, current_time, max_time = 4000, time_step = 0.1):
         """시뮬레이션 시작"""        
         if self.simulation_running:
             print("Simulation is already running. Stopping the current simulation...")
@@ -925,7 +929,7 @@ class AMHS:
                 }
 
                 compressed_payload = compress_data(payload)
-                socketio.emit('updateOHT', {'data': compressed_payload})
+                socketio.emit('updateOHT', {'data': compressed_payload}, to=sid)
 
             # Increment time
             current_time += time_step
@@ -937,7 +941,7 @@ class AMHS:
         
         
     
-    def accelerate_simul(self, socketio, current_time, max_time = 4000, time_step = 0.1):
+    def accelerate_simul(self, socketio, sid, current_time, max_time = 4000, time_step = 0.1):
         """시뮬레이션 시작"""        
         if self.simulation_running:
             print("Simulation is already running. Stopping the current simulation...")
@@ -1054,7 +1058,7 @@ class AMHS:
                 }
 
                 compressed_payload = compress_data(payload)
-                socketio.emit('updateOHT', {'data': compressed_payload})
+                socketio.emit('updateOHT', {'data': compressed_payload}, to=sid)
 
             # Increment time
             current_time += time_step
@@ -1064,7 +1068,7 @@ class AMHS:
         print('Simulation ended')
         
         
-    def only_simulation(self, socketio, current_time, max_time = 4000, time_step = 0.1):
+    def only_simulation(self, socketio, sid, current_time, max_time = 4000, time_step = 0.1):
         """시뮬레이션 시작"""        
         if self.back_simulation_running:
             print("Simulation is already running. Stopping the current simulation...")
@@ -1116,7 +1120,7 @@ class AMHS:
         self.back_simulation_running = False
         print('Simulation ended')
         
-        socketio.emit("backSimulationFinished")
+        socketio.emit("backSimulationFinished", to=sid)
 
         
         

@@ -4,10 +4,21 @@ import io from 'socket.io-client';
 import pako from 'pako'; // Gzip 압축 해제를 위해 pako 라이브러리 사용
 import { SunIcon, MoonIcon } from "@heroicons/react/24/outline"; // Tailwind Heroicons 추가
 import Modal from "./Modal"; // ✅ 모달 컴포넌트 추가 (결과 조회용)
+import { getClientId } from '../utils/getClientId';
+
+const client_id = getClientId();
+
+// const socket = io('http://localhost:5000');
+
+const socket = io('/', {
+    path: '/socket.io',
+    transports: ['websocket'],
+    query: {
+        client_id: client_id,
+      }
+  });
 
 
-
-const socket = io('http://localhost:5000');
 
 interface Node {
     id: string;
@@ -540,7 +551,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
 
             socket.disconnect();
-            socket.connect();    
+            // socket.connect();    
 
 
 
@@ -551,7 +562,14 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                 rafId.current = null; // 반드시 초기화
             }
 
-            socket.emit('stopSimulation');
+
+            socket.once('connect', () => {
+                socket.emit('stopSimulation');
+            });
+            
+            socket.connect();
+
+            // socket.emit('stopSimulation');
 
             socket.off('simulationStopped');
 
@@ -765,8 +783,8 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     
             socket.off('simulationStopped');
 
-            socket.disconnect();
-            socket.connect();
+            // socket.disconnect();
+            // socket.connect();
         });
 
     };
@@ -1087,7 +1105,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                         } else {
                             resetSimulation();
                             stopSimulation();
-                            resetSimulation();
+                            // resetSimulation();
                         }
                     }}
                 >

@@ -28,4 +28,4 @@ COPY . .
 EXPOSE 5000
 
 # Run the Flask app
-CMD ["wait-for-it.sh", "db:5432", "--", "python", "app.py"]
+CMD ["wait-for-it.sh", "db:5432", "--", "python", "app_session.py"]

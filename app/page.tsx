@@ -4,6 +4,12 @@ import Head from 'next/head';
 import dynamic from 'next/dynamic';
 import { useEffect, useState } from 'react';
 import io from 'socket.io-client';
+import { getClientId } from './utils/getClientId';
+
+
+const client_id = getClientId();
+
+// console.log(client_id);
 
 
 const OHTVisualization = dynamic(() => import('./components/OHTVisualization'), { ssr: false });
@@ -32,7 +38,15 @@ interface LayoutData {
     ports: Port[];
 }
 
-const socket = io('http://localhost:5000'); // 소켓 서버 주소
+// const socket = io('http://localhost:5000'); // 소켓 서버 주소
+
+const socket = io('/', {
+    path: '/socket.io',
+    transports: ['websocket'],
+    query: {
+        client_id: client_id,
+      }
+  });
 
 
 export default function Home() {
