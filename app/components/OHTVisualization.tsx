@@ -624,6 +624,9 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                 simulationData.current_time = acceleratedTime;  // current_time을 추가
             }
             socket.emit('startSimulation', simulationData);  // 시뮬레이션 시작 요청
+
+            console.log(ohtCount)
+
     
             setSelectedJobFile(null);
             setSelectedOhtFile(null); // Reset the file input when starting the simulation

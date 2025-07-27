@@ -251,8 +251,14 @@ def run_simulation(sid, max_time):
     
     job_list = user_sessions[sid].get('job_list', [])
     oht_list = user_sessions[sid].get('oht_list', [])
+    num_oht = user_sessions[sid].get('num_OHTs', 500)
     
-    amhs = AMHS(nodes=nodes, edges=edges, ports=ports, num_OHTs=500, max_jobs=1000, job_list=job_list, oht_list=oht_list)
+    print(num_oht)
+    
+    print(user_sessions[sid]['num_OHTs'])
+
+    
+    amhs = AMHS(nodes=nodes, edges=edges, ports=ports, num_OHTs=num_oht, max_jobs=1000, job_list=job_list, oht_list=oht_list)
     user_sessions[sid]['amhs'] = amhs
     amhs.start_simulation(socketio, sid, 0, max_time)
 
@@ -361,7 +367,7 @@ def accel_simulation(sid, current_time, max_time):
 
     job_list = user_sessions[sid].get('job_list', None)
     oht_list = user_sessions[sid].get('oht_list', None)
-    num_oht = user_sessions[sid].get('num_oht', 500)
+    num_oht = user_sessions[sid].get('num_OHTs', 500)
 
     amhs = AMHS(nodes=nodes, edges=edges, ports=ports, num_OHTs=num_oht, max_jobs=1000, job_list = job_list, oht_list = oht_list)
     user_sessions[sid]['amhs'] = amhs
@@ -375,7 +381,7 @@ def only_simulation(sid, max_time):
     # back_amhs = user_sessions[sid].get('back_amhs', None)
     job_list = user_sessions[sid].get('job_list', None)
     oht_list = user_sessions[sid].get('oht_list', None)
-    num_oht = user_sessions[sid].get('num_oht', 500)
+    num_oht = user_sessions[sid].get('num_OHTs', 500)
     back_amhs = AMHS(nodes=nodes, edges=edges, ports=ports, num_OHTs=num_oht, max_jobs=1000, job_list = job_list, oht_list = oht_list)
     user_sessions[sid]['back_amhs'] = back_amhs
 
@@ -390,11 +396,16 @@ def start_simulation(data):
     current_time = data.get('current_time', None)
     num_oht = data.get('num_OHTs', 500)
     
+    print(num_oht)
+
+    
     user_sessions[sid]['max_time'] = max_time
     user_sessions[sid]['current_time'] = current_time
     user_sessions[sid]['num_OHTs'] = num_oht
     
     user_sessions[sid]['amhs'] = None
+    
+    print(user_sessions[sid]['num_OHTs'])
 
     if not current_time:
         socketio.start_background_task(run_simulation, sid, max_time)

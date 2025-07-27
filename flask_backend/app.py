@@ -281,7 +281,9 @@ def run_simulation(max_time):
     
     job_list = user_sessions[sid].get('job_list', [])
     oht_list = user_sessions[sid].get('oht_list', [])
-    amhs = AMHS(nodes=nodes, edges=edges, ports=ports, num_OHTs=500, max_jobs=1000, job_list=job_list, oht_list=oht_list)
+    global num_oht
+    print('run', num_oht)
+    amhs = AMHS(nodes=nodes, edges=edges, ports=ports, num_OHTs=num_oht, max_jobs=1000, job_list=job_list, oht_list=oht_list)
     user_sessions[sid]['amhs'] = amhs
     amhs.start_simulation(socketio, 0, max_time)
 
@@ -407,7 +409,7 @@ def start_simulation(data):
     current_time = data.get('current_time', None)
     num_oht = data.get('num_OHTs', 500)
     amhs = None
-
+    print(num_oht)
     if not current_time:
         socketio.start_background_task(run_simulation, max_time)
     else:    
