@@ -17,18 +17,14 @@ from config import DATABASE_URL
 user_sessions = {}
 client_id_to_sid = {}
 
-#DB part
 
 def get_db_connection():
-    """PostgreSQL 데이터베이스 연결"""
     return psycopg2.connect(DATABASE_URL)
 
 def initialize_database():
-    """필요한 모든 테이블을 자동 생성하는 함수"""
     conn = get_db_connection()
     cur = conn.cursor()
 
-    # ✅ simulation_metadata 테이블 생성[sid]
     cur.execute("""
         CREATE TABLE IF NOT EXISTS simulation_metadata (
             simulation_id SERIAL PRIMARY KEY,
@@ -45,7 +41,6 @@ initialize_database()
 
 
 def create_simulation_table(simulation_id):
-    """각 시뮬레이션별 데이터를 저장할 테이블 생성"""
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(f"""
@@ -57,7 +52,6 @@ def create_simulation_table(simulation_id):
 
         );
     """)
-    # print('table created')
     conn.commit()
     cur.close()
     conn.close()
@@ -65,8 +59,7 @@ def create_simulation_table(simulation_id):
 
 
 def clear_future_edge_data(sid, simulation_id, simulation_time):
-    """현재 simulation time (float, 초 단위)을 HH:MM:SS 형식으로 변환 후 이후 데이터 삭제"""
-    formatted_time = format_simulation_time(simulation_time)  # ✅ HH:MM:SS 변환
+    formatted_time = format_simulation_time(simulation_time) 
     
     last_saved_time = user_sessions[sid].get('last_saved_time', 0)
 
@@ -75,18 +68,18 @@ def clear_future_edge_data(sid, simulation_id, simulation_time):
 
     cur.execute(f"""
         DELETE FROM simulation_{simulation_id} WHERE time >= %s;
-    """, (formatted_time,))  # Simulation Time 이후 데이터 삭제
+    """, (formatted_time,))
     
     cur.execute(f"""
         SELECT time FROM simulation_{simulation_id} ORDER BY time DESC LIMIT 1;
     """)
     last_row = cur.fetchone()
 
-    # ✅ last_saved_time 업데이트
+
     if last_row:
-        last_saved_time = parse_simulation_time(last_row[0])  # HH:MM:SS → 초 변환
+        last_saved_time = parse_simulation_time(last_row[0]) 
     else:
-        last_saved_time = simulation_time  # 모든 데이터가 삭제되었다면 현재 시간 유지
+        last_saved_time = simulation_time 
     
     user_sessions[sid]['last_saved_time'] = last_saved_time
 
@@ -95,31 +88,26 @@ def clear_future_edge_data(sid, simulation_id, simulation_time):
     conn.close()
     
 def parse_simulation_time(time_str):
-    """HH:MM:SS 형식의 문자열을 초 단위 float으로 변환"""
+
     h, m, s = map(int, time_str.split(':'))
     return h * 3600 + m * 60 + s
 
     
 def format_simulation_time(sim_time):
-    """✅ 시뮬레이션 시간을 HH:MM:SS 형태로 변환"""
+
     hours, remainder = divmod(sim_time, 3600)
     minutes, seconds = divmod(remainder, 60)
     return f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}"
-
-# stop_saving_event = threading.Event()
-# stop_saving_back_event = threading.Event()
 
 
 
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
-socketio = SocketIO(app, cors_allowed_origins="*")  # Enable CORS for SocketIO
+CORS(app) 
+socketio = SocketIO(app, cors_allowed_origins="*")  
 
-# Load the layout data
-with open('fab_oht_layout_2nd.json') as f:
+with open('fab_oht_layout.json') as f:
     layout_data = json.load(f)
-    # print('load_ended')
 
 @socketio.on('layout')
 def layout():
@@ -140,7 +128,7 @@ edges = [
             (next(node for node in nodes if node.id == rail['to']).coord[1] -
              next(node for node in nodes if node.id == rail['from']).coord[1])**2
         ),
-        max_speed=1500  # Default speed = 0.01
+        max_speed=1500
     )
     for rail in layout_data['rails']
 ]
@@ -159,7 +147,6 @@ ports = [
 def handle_get_simulation_tables():
     sid = request.sid
 
-    """저장된 시뮬레이션 테이블 목록을 소켓을 통해 조회"""
     conn = get_db_connection()
     cur = conn.cursor()
 
@@ -176,7 +163,7 @@ def handle_get_simulation_tables():
 
 @socketio.on('get_simulation_data')
 def handle_get_simulation_data(data):
-    """특정 시뮬레이션 결과를 소켓을 통해 조회"""
+
     sid = request.sid
 
     table_name = data.get('table_name')
@@ -184,10 +171,10 @@ def handle_get_simulation_data(data):
     conn = get_db_connection()
     cur = conn.cursor()
 
-    cur.execute(f"SELECT * FROM {table_name} ORDER BY time ASC;")  # ✅ 수정된 부분
+    cur.execute(f"SELECT * FROM {table_name} ORDER BY time ASC;") 
     rows = cur.fetchall()
 
-    columns = [desc[0] for desc in cur.description]  # 컬럼명 가져오기
+    columns = [desc[0] for desc in cur.description]
     result = [dict(zip(columns, row)) for row in rows]
 
     cur.close()
@@ -198,7 +185,7 @@ def handle_get_simulation_data(data):
 
 @socketio.on('delete_simulation_table')
 def handle_delete_simulation_table(data):
-    """특정 시뮬레이션 테이블을 삭제"""
+
     sid = request.sid
 
     table_name = data.get('table_name')
@@ -222,7 +209,7 @@ def handle_delete_simulation_table(data):
 
 @socketio.on('uploadFiles')
 def handle_file_upload(data):
-    sid = request.sid  # ✅ 반드시 필요
+    sid = request.sid
     
     user_sessions[sid] = {}
     
@@ -274,28 +261,27 @@ def save_edge_data(sid):
     amhs = user_sessions[sid].get('amhs', None)
 
     
-    max_wait_time = 10  # 최대 대기 시간 (초)
+    max_wait_time = 10
     waited_time = 0
     while amhs is None and waited_time < max_wait_time:
-        # print("⏳ Waiting for amhs to be initialized...")
-        time.sleep(1)  # 1초 대기
+        time.sleep(1)
         waited_time += 1
 
     if amhs is None:
         return
     
-    stop_saving_event.clear()  # 🔥 중지 이벤트 초기화
+    stop_saving_event.clear()
 
 
     while current_simulation_id:
-        while amhs is not None and amhs.simulation_running and not stop_saving_event.is_set():  # ✅ amhs가 None인지 체크
+        while amhs is not None and amhs.simulation_running and not stop_saving_event.is_set(): 
             if not amhs.queue.empty():
                 edge_data = amhs.queue.get()
                 if edge_data:
                     conn = get_db_connection()
                     cur = conn.cursor()
 
-                    # ✅ 시간 포맷팅 (초 → HH:MM:SS 변환)
+
                     formatted_data = [
                         (format_simulation_time(row[0]), row[1], row[2]) for row in edge_data
                     ]
@@ -310,7 +296,7 @@ def save_edge_data(sid):
                     cur.close()
                     conn.close()
         
-        break  # ✅ 루프 탈출
+        break 
 
 def save_edge_data_back(sid):    
         
@@ -324,7 +310,7 @@ def save_edge_data_back(sid):
     if back_simulation_id is None:
         return
 
-    max_wait_time = 10  # 최대 대기 시간 (초)
+    max_wait_time = 10
     waited_time = 0
     while back_amhs is None and waited_time < max_wait_time:
         time.sleep(1)
@@ -343,7 +329,6 @@ def save_edge_data_back(sid):
                     conn = get_db_connection()
                     cur = conn.cursor()
 
-                    # ✅ 시간 포맷팅 (초 → HH:MM:SS 변환)
                     formatted_data = [
                         (format_simulation_time(row[0]), row[1], row[2]) for row in edge_data
                     ]
@@ -376,9 +361,6 @@ def accel_simulation(sid, current_time, max_time):
     
 def only_simulation(sid, max_time):    
     
-    # sid = request.sid  # ✅ 반드시 필요
-
-    # back_amhs = user_sessions[sid].get('back_amhs', None)
     job_list = user_sessions[sid].get('job_list', None)
     oht_list = user_sessions[sid].get('oht_list', None)
     num_oht = user_sessions[sid].get('num_OHTs', 500)
@@ -390,7 +372,7 @@ def only_simulation(sid, max_time):
     
 @socketio.on('startSimulation')
 def start_simulation(data):
-    sid = request.sid  # ✅ 반드시 필요
+    sid = request.sid 
 
     max_time = data.get('max_time', 4000)
     current_time = data.get('current_time', None)
@@ -435,7 +417,7 @@ def start_simulation(data):
 @socketio.on('onlySimulation')
 def start_only_simulation(data):
     
-    sid = request.sid  # ✅ 반드시 필요
+    sid = request.sid 
 
     back_amhs = None
 
@@ -449,9 +431,6 @@ def start_only_simulation(data):
 
 
     socketio.start_background_task(only_simulation, sid, max_time)
-        
-    # global back_simulation_id
-    # global last_saved_time_back
     
     last_saved_time_back = -10
     
@@ -467,8 +446,6 @@ def start_only_simulation(data):
     
     user_sessions[sid]['back_simulation_id'] = back_simulation_id
 
-
-    # 새로운 시뮬레이션을 위한 테이블 생성
     create_simulation_table(back_simulation_id)
 
     cur.close()
@@ -482,21 +459,20 @@ def stop_simulation():
     sid = request.sid
     amhs = user_sessions[sid]['amhs']
     stop_saving_event = user_sessions[sid].get('stop_saving_event', None)
-    amhs.stop_simulation_event.set()  # Signal all running processes to stop
-    stop_saving_event.set()  # 🔥 DB 저장 중단
-    socketio.emit('simulationStopped', to=sid)  # Notify the frontend that the simulation has stopped
+    amhs.stop_simulation_event.set() 
+    stop_saving_event.set()
+    socketio.emit('simulationStopped', to=sid)
     
 @socketio.on('stopBackSimulation')
 def stop_Back_simulation():
-    # global back_amhs
     sid = request.sid
     back_amhs = user_sessions[sid]['back_amhs']
     stop_saving_back_event = user_sessions[sid].get('stop_saving_back_event', None)
 
 
-    back_amhs.back_stop_simulation_event.set()  # Signal all running processes to stop
-    stop_saving_back_event.set()  # 🔥 DB 저장 중단
-    socketio.emit('simulationBackStopped', to=sid)  # Notify the frontend that the simulation has stopped
+    back_amhs.back_stop_simulation_event.set()
+    stop_saving_back_event.set()  
+    socketio.emit('simulationBackStopped', to=sid) 
 
 @socketio.on('modiRail')
 def handle_rail_update(data):        
@@ -512,28 +488,26 @@ def handle_rail_update(data):
     removed_rail_key = data['removedRailKey']
     oht_positions = data['ohtPositions']
     is_removed = data['isRemoved']
-    current_time = data['currentTime']  # currentTime 추가
+    current_time = data['currentTime'] 
     edge_data = data['edges']
     
     amhs.simulation_running = False
     amhs.stop_simulation_event.set()
-    stop_saving_event.set()  # 🔥 DB 저장 중단
+    stop_saving_event.set()
     
     if amhs.simulation_running:
         amhs.stop_simulation_event.set()
         while amhs.simulation_running:
-            socketio.sleep(0.01)  # Wait for the current simulation to stop
-    
+            socketio.sleep(0.01) 
+            
     socketio.emit('simulationStopped', to=sid) 
     
     amhs.current_time = current_time
 
-    # Remove the specified rail from the simulation graph
     source, dest = removed_rail_key.split('-')
     amhs.modi_edge(source, dest, oht_positions, is_removed)
     amhs.reinitialize_simul(oht_positions, edge_data)
     
-        # DB에서 현재 simulation time 이후 데이터 삭제
     if current_simulation_id:
         clear_future_edge_data(sid, current_simulation_id, current_time)
     
@@ -543,25 +517,12 @@ def handle_rail_update(data):
 
 
 def restart_simulation(sid, amhs, current_time):
-    """
-    Restart the simulation from the given current_time using the existing AMHS object.
-
-    Parameters:
-        amhs (AMHS): The current AMHS object to be used for the simulation.
-        current_time (float): The time to restart the simulation from.
-        max_time (float): The maximum time for the simulation to run. Default is 4000.
-        time_step (float): The time step for the simulation loop. Default is 0.01.
-
-    Returns:
-        None
-    """
-
     max_time = user_sessions[sid]['max_time']
     
     if amhs.simulation_running:
         amhs.stop_simulation_event.set()
         while amhs.simulation_running:
-            socketio.sleep(0.01)  # Wait for the current simulation to stop
+            socketio.sleep(0.01) 
         return
     
     amhs.start_simulation(socketio, sid, current_time, max_time)    
@@ -570,16 +531,16 @@ def restart_simulation(sid, amhs, current_time):
 @socketio.on('connect')
 def on_connect():
     sid = request.sid
-    client_id = request.args.get('client_id')  # 쿼리 파라미터로 client_id 받기
+    client_id = request.args.get('client_id') 
     
     if client_id in client_id_to_sid:
-        user_sessions[sid] = client_id_to_sid[client_id]  # 레퍼런스 복사
+        user_sessions[sid] = client_id_to_sid[client_id]
         client_id_to_sid[client_id] = user_sessions[sid]
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    sid = request.sid # 레퍼런스 복사
-    client_id = request.args.get('client_id')  # 쿼리 파라미터로 client_id 받기
+    sid = request.sid 
+    client_id = request.args.get('client_id') 
     client_id_to_sid[client_id] = user_sessions[sid]
 
     if sid in user_sessions:

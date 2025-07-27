@@ -3,8 +3,7 @@ version: '3.8'
 services:
   frontend:
     build: ./
-    # ports:
-    #   - "3000:3000"
+
     expose:
       - "3000"
     depends_on:
@@ -20,9 +19,7 @@ services:
       - "127.0.0.1:5000:5000"
     expose:
       - "5000"
-    # environment:
-    #   - DATABASE_URL=postgresql://postgres:password@db:5432/oht_simulation
-    #   - FLASK_ENV=production
+
     restart: always
     env_file:
       - .env
@@ -36,13 +33,7 @@ services:
   db:
     image: postgres:latest
     restart: always
-    # environment:
-    #   POSTGRES_USER: postgres
-    #   POSTGRES_PASSWORD: password
-    #   POSTGRES_DB: oht_simulation
 
-    # ports:
-    #   - "127.0.0.1:5432:5432"
 
     expose:
      - "5432"

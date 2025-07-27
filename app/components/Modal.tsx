@@ -4,7 +4,6 @@ import { getClientId } from '../utils/getClientId';
 
 const client_id = getClientId();
 
-// const socket = io('http://localhost:5000');
 const socket = io('/', {
     path: '/socket.io',
     transports: ['websocket'],
@@ -45,23 +44,22 @@ const Modal: React.FC<ModalProps> = ({ onClose }) => {
         socket.emit("get_simulation_data", { table_name: tableName });
     
         socket.on("simulation_data", (data) => {
-            // ✅ Pivot Table 변환
+
             const pivotData: Record<string, Record<string, number>> = {};
     
             data.data.forEach(({ time, edge_id, avg_speed }) => {
                 if (!pivotData[time]) pivotData[time] = { time };
-                pivotData[time][edge_id] = avg_speed;  // ✅ Edge ID를 컬럼으로 변환
+                pivotData[time][edge_id] = avg_speed;
             });
     
-            setSimulationData(Object.values(pivotData));  // ✅ 변환된 데이터 설정
+            setSimulationData(Object.values(pivotData)); 
         });
     };
     
 
     const downloadCSV = () => {
         if (!selectedTable || simulationData.length === 0) return;
-    
-        // ✅ Pivot된 데이터의 컬럼명 가져오기
+
         const headers = Object.keys(simulationData[0]).join(",");
         const rows = simulationData.map((row) =>
             Object.values(row).join(",")
@@ -98,21 +96,7 @@ const Modal: React.FC<ModalProps> = ({ onClose }) => {
                 {/* 시뮬레이션 테이블 목록 */}
                 <div className="mb-4">
                     <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">Available Simulations</h3>
-                    {/* <ul className="mt-2 max-h-40 overflow-y-auto border border-gray-300 dark:border-gray-600 rounded p-2">
-                        {simulationTables.length > 0 ? (
-                            simulationTables.map((table) => (
-                                <li 
-                                    key={table} 
-                                    className="cursor-pointer p-2 hover:bg-gray-200 dark:hover:bg-gray-700"
-                                    onClick={() => fetchSimulationData(table)}
-                                >
-                                    {table}
-                                </li>
-                            ))
-                        ) : (
-                            <p className="text-gray-500 dark:text-gray-400">No simulations found.</p>
-                        )}
-                    </ul> */}
+
                     <ul className="mt-2 max-h-40 overflow-y-auto border border-gray-300 dark:border-gray-600 rounded p-2">
                         {simulationTables.length > 0 ? (
                             simulationTables.map((table) => (
@@ -120,12 +104,10 @@ const Modal: React.FC<ModalProps> = ({ onClose }) => {
                                     key={table} 
                                     className="flex justify-between items-center cursor-pointer p-2 hover:bg-gray-200 dark:hover:bg-gray-700"
                                 >
-                                    {/* 테이블 클릭 시 데이터 불러오기 */}
                                     <span onClick={() => fetchSimulationData(table)} className="flex-grow">
                                         {table}
                                     </span>
 
-                                    {/* ❌ 삭제 버튼 */}
                                     <button 
                                         className="text-red-500 hover:underline ml-4"
                                         onClick={() => deleteSimulationTable(table)}
@@ -140,7 +122,6 @@ const Modal: React.FC<ModalProps> = ({ onClose }) => {
                     </ul>
                 </div>
 
-                {/* 선택한 시뮬레이션 데이터 */}
                 {selectedTable && (
                     <div>
                         <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">Simulation Data: {selectedTable}</h3>
@@ -157,7 +138,7 @@ const Modal: React.FC<ModalProps> = ({ onClose }) => {
                     </div>
                 )}
 
-                {/* 닫기 버튼 */}
+
                 <div className="mt-4 text-right">
                     <button className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600" onClick={onClose}>
                         Close
