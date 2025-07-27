@@ -39,5 +39,6 @@ test.ipynb
 test.py
 
 /flask_backend/simul_parallel.py
+/flask_backend/app_session.py
 
 .env
