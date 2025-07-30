@@ -128,7 +128,7 @@ edges = [
             (next(node for node in nodes if node.id == rail['to']).coord[1] -
              next(node for node in nodes if node.id == rail['from']).coord[1])**2
         ),
-        max_speed=1500
+        max_speed=1000 if rail.get('curve', 0) == 1 else 5000
     )
     for rail in layout_data['rails']
 ]

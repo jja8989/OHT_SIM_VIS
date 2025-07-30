@@ -195,7 +195,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
         rails.forEach(rail => {
             rail.count = 0;
-            rail.avg_speed = 1500;
+            rail.avg_speed = rail.max_speed;
         });
 
 
