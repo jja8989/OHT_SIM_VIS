@@ -106,7 +106,7 @@ app = Flask(__name__)
 CORS(app) 
 socketio = SocketIO(app, cors_allowed_origins="*")  
 
-with open('fab_oht_layout.json') as f:
+with open('fab_oht_layout_updated.json') as f:
     layout_data = json.load(f)
 
 @socketio.on('layout')
@@ -225,12 +225,14 @@ def handle_file_upload(data):
     
     user_sessions[sid]['job_list'] = []
     user_sessions[sid]['oht_list'] = []
+    
     if job_file:
         df = pd.read_csv(io.BytesIO(job_file))
         user_sessions[sid]['job_list'] = [[row['start_port'], row['end_port']] for _, row in df.iterrows()]
     if oht_file:
         df = pd.read_csv(io.BytesIO(oht_file))
         user_sessions[sid]['oht_list'] = [row['start_node'] for _, row in df.iterrows()]
+        user_sessions[sid]['num_OHTs'] = len(user_sessions[sid]['oht_list'])
     emit('filesProcessed', {"message": "Files successfully uploaded"}, to=sid)
     
 
@@ -238,11 +240,12 @@ def run_simulation(sid, max_time):
     
     job_list = user_sessions[sid].get('job_list', [])
     oht_list = user_sessions[sid].get('oht_list', [])
-    num_oht = user_sessions[sid].get('num_OHTs', 500)
     
-    print(num_oht)
-    
-    print(user_sessions[sid]['num_OHTs'])
+    if oht_list:
+        num_oht = len(oht_list)
+    else:
+        num_oht = user_sessions[sid].get('num_OHTs', 500)
+    # num_oht = user_sessions[sid].get('num_OHTs', 500)
 
     
     amhs = AMHS(nodes=nodes, edges=edges, ports=ports, num_OHTs=num_oht, max_jobs=1000, job_list=job_list, oht_list=oht_list)
@@ -352,7 +355,12 @@ def accel_simulation(sid, current_time, max_time):
 
     job_list = user_sessions[sid].get('job_list', None)
     oht_list = user_sessions[sid].get('oht_list', None)
-    num_oht = user_sessions[sid].get('num_OHTs', 500)
+        
+    if oht_list:
+        num_oht = len(oht_list)
+    else:
+        num_oht = user_sessions[sid].get('num_OHTs', 500)
+    # num_oht = user_sessions[sid].get('num_OHTs', 500)
 
     amhs = AMHS(nodes=nodes, edges=edges, ports=ports, num_OHTs=num_oht, max_jobs=1000, job_list = job_list, oht_list = oht_list)
     user_sessions[sid]['amhs'] = amhs
@@ -363,7 +371,11 @@ def only_simulation(sid, max_time):
     
     job_list = user_sessions[sid].get('job_list', None)
     oht_list = user_sessions[sid].get('oht_list', None)
-    num_oht = user_sessions[sid].get('num_OHTs', 500)
+    # num_oht = user_sessions[sid].get('num_OHTs', 500)
+    if oht_list:
+        num_oht = len(oht_list)
+    else:
+        num_oht = user_sessions[sid].get('num_OHTs', 500)
     back_amhs = AMHS(nodes=nodes, edges=edges, ports=ports, num_OHTs=num_oht, max_jobs=1000, job_list = job_list, oht_list = oht_list)
     user_sessions[sid]['back_amhs'] = back_amhs
 
@@ -376,18 +388,18 @@ def start_simulation(data):
 
     max_time = data.get('max_time', 4000)
     current_time = data.get('current_time', None)
-    num_oht = data.get('num_OHTs', 500)
     
-    print(num_oht)
-
+    oht_list = user_sessions[sid].get('oht_list', [])
+    if oht_list:
+        num_oht = len(oht_list)
+    else:
+        num_oht = data.get('num_OHTs', 500)  # fallback
     
     user_sessions[sid]['max_time'] = max_time
     user_sessions[sid]['current_time'] = current_time
     user_sessions[sid]['num_OHTs'] = num_oht
     
     user_sessions[sid]['amhs'] = None
-    
-    print(user_sessions[sid]['num_OHTs'])
 
     if not current_time:
         socketio.start_background_task(run_simulation, sid, max_time)
@@ -423,7 +435,12 @@ def start_only_simulation(data):
 
     max_time = data.get('max_time', 4000)
     current_time = data.get('current_time', None)
-    num_oht = data.get('num_OHTs', 500)
+
+    oht_list = user_sessions[sid].get('oht_list', [])
+    if oht_list:
+        num_oht = len(oht_list)
+    else:
+        num_oht = data.get('num_OHTs', 500)  # fallback
     
     user_sessions[sid]['max_time'] = max_time
     user_sessions[sid]['current_time'] = current_time

@@ -8,7 +8,8 @@ import { getClientId } from '../utils/getClientId';
 
 const client_id = getClientId();
 
-const socket = io('/', {
+
+const socket = io(process.env.NEXT_PUBLIC_SOCKET_URL || '/', {
     path: '/socket.io',
     transports: ['websocket'],
     query: {
@@ -28,6 +29,7 @@ interface Rail {
     from: string;
     to: string;
     count: number;
+    max_speed : number;
     avg_speed : number;
 }
 
@@ -238,7 +240,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             .attr('stroke', d => {
                 const value = displayModeRef.current === 'count'
                     ? d.count / 100
-                    : (1500-d.avg_speed) / 500;
+                    : (d.max_speed-d.avg_speed) / d.max_speed;
                 return colorScale(Math.max(0, Math.min(1, value)));
             })
             .on('mouseover', (event, d) => showTooltip(event, objectToString(d)))
@@ -418,13 +420,13 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
     const lightModeColors = {
         node: "red",
-        rail: (d: Rail) => colorScale(Math.max(0, Math.min(1, displayModeRef.current === 'count' ? d.count / 100 : (1500 - d.avg_speed) / 500))),
+        rail: (d: Rail) => colorScale(Math.max(0, Math.min(1, displayModeRef.current === 'count' ? d.count / 100 : (d.max_speed - d.avg_speed) / d.max_speed))),
         port: "green"
     };
     
     const darkModeColors = {
         node: "white",  
-        rail: (d: Rail) => colorScale(Math.max(0, Math.min(1, displayModeRef.current === 'count' ? d.count / 100 : (1500 - d.avg_speed) / 500))).replace("rgb", "rgba").replace(")", ", 0.8)"),  // 반투명
+        rail: (d: Rail) => colorScale(Math.max(0, Math.min(1, displayModeRef.current === 'count' ? d.count / 100 : (d.max_speed - d.avg_speed) / d.max_speed))).replace("rgb", "rgba").replace(")", ", 0.8)"),  // 반투명
         port: "#00ff7f" 
     };
     
@@ -464,15 +466,17 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
         const isRemoved = selectedRail.classed('removed');
         if (isRemoved) {
+            selectedRail
+            .attr('stroke', 'gray')
             return;
         }
     
         const value = displayModeRef.current === 'count' 
             ? rail.count / 100 
-            : (1500-rail.avg_speed) / 500;
+            : (rail.max_speed-rail.avg_speed) / rail.max_speed;
 
         selectedRail.transition()
-            .duration(25)
+            .duration(50)
             .attr('stroke', colorScale(Math.max(0, Math.min(1, value))))
     };
 
@@ -499,10 +503,9 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             .filter(d => d === selectedRail.rail)
             .attr('stroke', () => {
                 if (isRemoved) {
-
                     const value = displayModeRef.current === 'count'
                         ? selectedRail.rail.count / 100
-                        : (1500-selectedRail.rail.avg_speed) / 500; 
+                        : (selectedRail.rail.max_speed-selectedRail.rail.avg_speed) / selectedRail.rail.max_speed; 
                     return colorScale(Math.max(0, Math.min(1, value))); 
                 }
                 return 'gray';
@@ -556,17 +559,39 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         }
     };
 
-    const startSimulation = () => {
+    const startSimulation = async () => {
 
         console.log('Starting simulation');
         setIsLoading(true);
 
-        const formData = new FormData();
+        // const formData = new FormData();
 
-        formData.append('oht_file', selectedOhtFile);
-        formData.append('job_file', selectedJobFile);
+        // formData.append('oht_file', selectedOhtFile);
+        // formData.append('job_file', selectedJobFile);
 
-        socket.emit('uploadFiles', formData); 
+        let jobBuffer = null;   
+        let ohtBuffer = null;
+
+        if (selectedJobFile) {
+            jobBuffer = await selectedJobFile.arrayBuffer();
+        }
+
+        if (selectedOhtFile) {
+            ohtBuffer = await selectedOhtFile.arrayBuffer();
+        }
+
+        // const jobBuffer = await selectedJobFile.arrayBuffer();
+        // const ohtBuffer = await selectedOhtFile.arrayBuffer();
+
+        socket.emit('uploadFiles', {
+            job_file: jobBuffer,
+            oht_file: ohtBuffer
+        });
+
+
+        // console.log(selectedOhtFile);
+
+        // socket.emit('uploadFiles', formData); 
 
         socket.on('filesProcessed', (data) => {
             console.log('Files successfully uploaded:', data);
@@ -578,9 +603,6 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                 simulationData.current_time = acceleratedTime; 
             }
             socket.emit('startSimulation', simulationData); 
-
-            console.log(ohtCount)
-
     
             setSelectedJobFile(null);
             setSelectedOhtFile(null);
@@ -666,25 +688,25 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
         railsRef.current.forEach((rail) => {
             rail.count = 0;
-            rail.avg_speed = 1500;
+            rail.avg_speed = rail.max_speed;
         });
 
         d3.selectAll('.rail')
             .each(function (d: Rail) {
                 d.count = 0; 
-                d.avg_speed = 1500;
+                d.avg_speed = d.max_speed;
             })
             .classed('removed', false); 
 
         d3.selectAll('.rail')
         .each(function (d: Rail) {
             d.count = 0; 
-            d.avg_speed = 1500;
+            d.avg_speed = d.max_speed;
         })
         .attr('stroke', d => {
             const value = displayModeRef.current === 'count'
                 ? d.count / 100
-                : (1500-d.avg_speed) / 500;
+                : (d.max_speed-d.avg_speed) / d.max_speed;
             return colorScale(Math.max(0, Math.min(1, value))); 
         });
 
@@ -711,26 +733,26 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
             railsRef.current.forEach((rail) => {
                 rail.count = 0;
-                rail.avg_speed = 1500;
+                rail.avg_speed = rail.max_speed;
             });
 
             d3.selectAll('.rail')
                 .each(function (d: Rail) {
                     d.count = 0;
-                    d.avg_speed = 1500;
+                    d.avg_speed = d.max_speed;
                 })
                 .classed('removed', false);
    
             d3.selectAll('.rail')
             .each(function (d: Rail) {
                 d.count = 0; 
-                d.avg_speed = 1500;
+                d.avg_speed = d.max_speed;
             })
             .attr('stroke', d => {
 
                 const value = displayModeRef.current === 'count'
                     ? d.count / 100 
-                    : (1500-d.avg_speed) / 500; 
+                    : (d.max_speed-d.avg_speed) / d.max_speed; 
                 return colorScale(Math.max(0, Math.min(1, value))); 
             });
     

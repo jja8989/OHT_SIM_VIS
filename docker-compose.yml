@@ -13,6 +13,9 @@ services:
     restart: always
     networks:
       - oht_network
+    env_file:
+      - .env
+    
 
 
   backend:

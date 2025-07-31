@@ -4,14 +4,15 @@ import { getClientId } from '../utils/getClientId';
 
 const client_id = getClientId();
 
-const socket = io('/', {
+
+const socket = io(process.env.NEXT_PUBLIC_SOCKET_URL || '/', {
     path: '/socket.io',
     transports: ['websocket'],
     query: {
         client_id: client_id,
       }
   });
-
+  
 interface ModalProps {
     onClose: () => void;
 }

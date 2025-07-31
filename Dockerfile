@@ -10,6 +10,8 @@ RUN npm install --include=dev
 
 # # Copy application code
 COPY . .
+COPY ./.env .
+
 # # Expose the Next.js server port
 EXPOSE 3000
 

@@ -34,7 +34,9 @@ interface LayoutData {
     ports: Port[];
 }
 
-const socket = io('/', {
+console.log(process.env.NEXT_PUBLIC_SOCKET_URL);
+
+const socket = io(process.env.NEXT_PUBLIC_SOCKET_URL || '/', {
     path: '/socket.io',
     transports: ['websocket'],
     query: {
