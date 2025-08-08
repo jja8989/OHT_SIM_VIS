@@ -48,7 +48,7 @@ def create_simulation_table(simulation_id):
             time TEXT,
             edge_id TEXT,
             avg_speed FLOAT,
-            PRIMARY KEY (time, edge_id)  -- ✅ 시간 + 엣지 ID를 복합 키로 설정
+            PRIMARY KEY (time, edge_id)
 
         );
     """)
@@ -262,21 +262,21 @@ def save_edge_data(sid):
     stop_saving_event = user_sessions[sid].get('stop_saving_event', None)
 
     amhs = user_sessions[sid].get('amhs', None)
-
     
     max_wait_time = 10
     waited_time = 0
     while amhs is None and waited_time < max_wait_time:
         time.sleep(1)
         waited_time += 1
+        amhs = user_sessions[sid].get('amhs', None)
 
     if amhs is None:
         return
     
     stop_saving_event.clear()
 
-
     while current_simulation_id:
+
         while amhs is not None and amhs.simulation_running and not stop_saving_event.is_set(): 
             if not amhs.queue.empty():
                 edge_data = amhs.queue.get()
@@ -318,6 +318,8 @@ def save_edge_data_back(sid):
     while back_amhs is None and waited_time < max_wait_time:
         time.sleep(1)
         waited_time += 1
+        back_amhs = user_sessions[sid].get('back_amhs', None)    
+
 
     if back_amhs is None:
         return

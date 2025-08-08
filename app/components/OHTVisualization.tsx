@@ -362,7 +362,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
                 else{
                     oht.transition()
-                    .duration(50)
+                    .duration(500)
                     .ease(d3.easeLinear) 
                     .attr("cx", yScale(updatedOHT.x))
                     .attr("cy", yScale(updatedOHT.y))
