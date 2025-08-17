@@ -12,7 +12,7 @@ const socket = io(process.env.NEXT_PUBLIC_SOCKET_URL || '/', {
         client_id: client_id,
       }
   });
-  
+
 interface ModalProps {
     onClose: () => void;
 }
@@ -94,7 +94,7 @@ const Modal: React.FC<ModalProps> = ({ onClose }) => {
             <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-lg w-1/2">
                 <h2 className="text-lg font-semibold mb-4 text-gray-900 dark:text-white">Simulation Results</h2>
                 
-                {/* 시뮬레이션 테이블 목록 */}
+
                 <div className="mb-4">
                     <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">Available Simulations</h3>
 

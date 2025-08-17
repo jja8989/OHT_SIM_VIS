@@ -362,7 +362,6 @@ def accel_simulation(sid, current_time, max_time):
         num_oht = len(oht_list)
     else:
         num_oht = user_sessions[sid].get('num_OHTs', 500)
-    # num_oht = user_sessions[sid].get('num_OHTs', 500)
 
     amhs = AMHS(nodes=nodes, edges=edges, ports=ports, num_OHTs=num_oht, max_jobs=1000, job_list = job_list, oht_list = oht_list)
     user_sessions[sid]['amhs'] = amhs
@@ -373,7 +372,7 @@ def only_simulation(sid, max_time):
     
     job_list = user_sessions[sid].get('job_list', None)
     oht_list = user_sessions[sid].get('oht_list', None)
-    # num_oht = user_sessions[sid].get('num_OHTs', 500)
+
     if oht_list:
         num_oht = len(oht_list)
     else:
@@ -395,7 +394,7 @@ def start_simulation(data):
     if oht_list:
         num_oht = len(oht_list)
     else:
-        num_oht = data.get('num_OHTs', 500)  # fallback
+        num_oht = data.get('num_OHTs', 500)
     
     user_sessions[sid]['max_time'] = max_time
     user_sessions[sid]['current_time'] = current_time
@@ -442,7 +441,7 @@ def start_only_simulation(data):
     if oht_list:
         num_oht = len(oht_list)
     else:
-        num_oht = data.get('num_OHTs', 500)  # fallback
+        num_oht = data.get('num_OHTs', 500)
     
     user_sessions[sid]['max_time'] = max_time
     user_sessions[sid]['current_time'] = current_time
