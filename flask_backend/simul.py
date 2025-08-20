@@ -74,12 +74,12 @@ class edge():
                     speed = self.length / travel_time
                     total_time_covered += travel_time
                     total_distance_covered += speed * travel_time
-                    recent_speeds.append(speed)
+                    recent_speeds.append(min(speed, self.max_speed))
 
 
         if len(self.OHTs) > 0:
             for oht in self.OHTs:
-                recent_speeds.append(oht.speed)
+                recent_speeds.append(min(oht.speed, self.max_speed))  # ⬅️ clamp
 
         if recent_speeds:
             avg_speed = sum(recent_speeds) / len(recent_speeds)
@@ -100,6 +100,8 @@ class edge():
         alpha = 2 / (time_window / 100) 
         alpha = max(0.1, min(alpha, 0.2)) 
         avg_speed = alpha * avg_speed + (1 - alpha) * prev_avg_speed
+        
+        avg_speed = min(avg_speed, self.max_speed)
         
         avg_speed = round(avg_speed, 2)
 
@@ -224,7 +226,6 @@ class OHT():
                         
                         edge = self.edge_map[self.edge]
                         
-                        
                         if self not in edge.OHTs:
                             edge.OHTs.append(self)
                             edge.count += 1
@@ -250,7 +251,6 @@ class OHT():
         if self.is_arrived():
             self.arrive()
             return
-
 
         self.speed = min(max(self.speed + self.acc * time_step, 0), edge.max_speed)
         
@@ -333,9 +333,6 @@ class OHT():
                 if 0 < dist_diff < self.rect:
                     emergency_coeff = 1.0 * (dist_diff < emergency_threshold or self.speed == 0)
                     self.acc = emergency_coeff * (-self.speed / time_step) + (1-emergency_coeff) * (-3500)
-                    # self.acc = -3500
-                    # if self.speed == 0:
-                    #     self.acc = 0
                     return
                 
         if self.node_map[edge.dest].OHT is not None:
@@ -344,12 +341,6 @@ class OHT():
             if 0 < dist_diff < self.rect:
                 emergency_coeff = 1.0 * (dist_diff < emergency_threshold)
                 self.acc = emergency_coeff * (-self.speed / time_step) + (1-emergency_coeff) * (-3500)
-            # if 0 < dist_diff < self.rect: 
-            #     self.acc = -self.speed/time_step 
-
-            #     # self.acc = -3500
-                # if self.speed == 0:
-                #     self.acc = 0
 
                 return
               
@@ -363,11 +354,6 @@ class OHT():
                     
                     emergency_coeff = 1.0 * (dist_diff < emergency_threshold or self.speed == 0)
                     self.acc = emergency_coeff * (-self.speed / time_step) + (1-emergency_coeff) * (-3500)
-                    # self.acc = -self.speed/time_step 
-                    # self.acc = -3500
-                    
-                    # if self.speed == 0:
-                    #     self.acc = 0
 
                     return
             except:
@@ -409,33 +395,7 @@ class OHT():
                     return
             except:
                 pass
-            
-        # if len(self.path) > 0:
-        #     outgoing_edges = [
-        #         outgoing_edge for outgoing_edge in self.node_map[edge.dest].outgoing_edges
-        #         if outgoing_edge != self.path[0]
-        #     ]
-        
-        #     if len(outgoing_edges) == 1:
-        #         rem_diff = edge.length - self.from_dist 
-        #         try:
-        #             other_oht = self.edge_map[outgoing_edges[0]].OHTs[0]
-        #             other_diff= other_oht.from_dist 
-        #             dist_diff = rem_diff + other_diff 
-        #             if 0 < dist_diff <  self.rect: 
-        #                 emergency_coeff = 1.0 * (dist_diff < emergency_threshold or self.speed == 0)
-        #                 self.acc = emergency_coeff * (-self.speed / time_step) + (1-emergency_coeff) * (-3500)
-        #                 # self.acc = -self.speed/time_step
-        #                 # self.acc = -3500
 
-                        
-        #                 # if self.speed == 0:
-        #                 #     self.acc = 0
-        #                 return
-        #         except:
-        #             pass
-
-        # self.acc = (edge.max_speed - self.speed) / time_step
         self.acc = 2000 if self.speed < edge.max_speed else 0
 
         
@@ -849,7 +809,7 @@ class AMHS:
             for oht in self.OHTs:
                 oht.move(time_step, current_time)
 
-            self.update_edge_metrics(current_time, time_window=500)
+            self.update_edge_metrics(current_time, time_window=600)
             
             for oht in self.OHTs:
                 oht.cal_pos(time_step)
@@ -939,7 +899,7 @@ class AMHS:
             for oht in self.OHTs:
                 oht.move(time_step, _current_time)
 
-            self.update_edge_metrics(_current_time, time_window=500)
+            self.update_edge_metrics(_current_time, time_window=600)
             
             for oht in self.OHTs:
                 oht.cal_pos(time_step)
@@ -972,7 +932,7 @@ class AMHS:
             for oht in self.OHTs:
                 oht.move(time_step, _current_time)
 
-            self.update_edge_metrics(_current_time, time_window=500)
+            self.update_edge_metrics(_current_time, time_window=600)
             
             for oht in self.OHTs:
                 oht.cal_pos(time_step)
@@ -1060,7 +1020,7 @@ class AMHS:
             for oht in self.OHTs:
                 oht.move(time_step, current_time)
 
-            self.update_edge_metrics(current_time, time_window=500)
+            self.update_edge_metrics(current_time, time_window=600)
             
             for oht in self.OHTs:
                 oht.cal_pos(time_step)
