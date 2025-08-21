@@ -468,7 +468,6 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
 
             if (stopAtRef.current - simulTime.current <= 0.5) {
-                console.log(simulTime.current)
                 setIsRunning(false);
                 if (rafId.current) { cancelAnimationFrame(rafId.current); rafId.current = null; }
                 return;
