@@ -27,7 +27,7 @@ class node():
 
         self.incoming_edges = []
         self.outgoing_edges = []
-        self.OHT = None
+        # self.OHT = None
         
 class edge():
     def __init__(self, source, dest, length, max_speed):
@@ -42,74 +42,63 @@ class edge():
         self.count = 0  
         self.avg_speed = max_speed
         self.entry_exit_records = {} 
-        
+                    
     def prune_old_records(self, current_time, time_window):
+        t0 = max(0, current_time - time_window)
 
-        for oht_id, records in list(self.entry_exit_records.items()):  
+        for oht_id, records in list(self.entry_exit_records.items()):
+            pruned = []
+            for entry, exit in records:
+                if exit is None:
+                    pruned.append((entry, exit))
+                    continue
+                start = max(entry, t0)
+                end = min(exit, current_time)
+                if end - start > 0:
+                    pruned.append((entry, exit))
 
-            self.entry_exit_records[oht_id] = [
-                (entry, exit) for entry, exit in records
-                if exit is not None and exit >= current_time - time_window
-            ]
-
-
-            if not self.entry_exit_records[oht_id]:
+            if pruned:
+                self.entry_exit_records[oht_id] = pruned
+            else:
                 del self.entry_exit_records[oht_id]
 
     def calculate_avg_speed(self, time_window, current_time):
+
         self.prune_old_records(current_time, time_window)
 
-        total_time_covered = 0
-        total_distance_covered = 0  
-        recent_speeds = [] 
-        
-        for oht_id, records in self.entry_exit_records.items():
-            relevant_records = [
-                (entry, exit) for entry, exit in records
-                if exit is not None and entry >= current_time - time_window
-            ]
-            for entry, exit in relevant_records:
-                travel_time = exit - entry
-                if travel_time > 0.1: 
-                    speed = self.length / travel_time
-                    total_time_covered += travel_time
-                    total_distance_covered += speed * travel_time
-                    recent_speeds.append(min(speed, self.max_speed))
+        t0 = max(0, current_time - time_window)
+        total_time = 0.0
+        total_dist = 0.0
 
+        for _, records in self.entry_exit_records.items():
+            for entry, exit in records:
+                ex = current_time if exit is None else exit
+                start = max(entry, t0)
+                end = min(ex, current_time)
+                overlap = end - start
+                if overlap <= 0:
+                    continue
+                dur = ex - entry
+                if dur > 1e-6:
+                    total_time += overlap
+                    total_dist += self.length * (overlap / dur)
 
-        if len(self.OHTs) > 0:
-            for oht in self.OHTs:
-                recent_speeds.append(min(oht.speed, self.max_speed))  # ⬅️ clamp
-
-        if recent_speeds:
-            avg_speed = sum(recent_speeds) / len(recent_speeds)
+        if total_time > 0:
+            observed_avg = total_dist / total_time
         else:
-            avg_speed = getattr(self, "avg_speed", self.max_speed) 
-            
-        prev_avg_speed = getattr(self, "avg_speed", avg_speed)
-        if len(self.OHTs) == 0 and not recent_speeds:
-            recovery_rate = 0.1 
-            avg_speed = prev_avg_speed * (1 - recovery_rate) + self.max_speed * recovery_rate
+            observed_avg = getattr(self, "avg_speed", self.max_speed)
 
+        utilization = min(1.0, total_time / max(1e-6, float(time_window)))
+        blended = utilization * observed_avg + (1.0 - utilization) * self.max_speed
 
-        elif len(self.OHTs) > 0 and all(oht.speed < 1 for oht in self.OHTs):
-            decay_rate = 0.1 
-            avg_speed = prev_avg_speed * (1 - decay_rate)
+        prev = getattr(self, "avg_speed", blended)
+        alpha = 0.2 
+        smoothed = alpha * blended + (1 - alpha) * prev
 
+        smoothed = max(0.0, min(smoothed, self.max_speed))
 
-        alpha = 2 / (time_window / 100) 
-        alpha = max(0.1, min(alpha, 0.2)) 
-        avg_speed = alpha * avg_speed + (1 - alpha) * prev_avg_speed
-        
-        avg_speed = min(avg_speed, self.max_speed)
-        
-        avg_speed = round(avg_speed, 2)
-
-
-        self.avg_speed = avg_speed
-
-        return min(avg_speed, self.max_speed)
-
+        self.avg_speed = smoothed
+        return self.avg_speed
 
     
 class port():
@@ -169,6 +158,7 @@ class OHT():
 
         
     def move(self, time_step, current_time):
+        
         if self.status == 'ON_REMOVED':
             self.speed = 0
             self.acc = 0
@@ -179,7 +169,7 @@ class OHT():
             self.acc = 0
             if len(self.path) != 0:
                 from_node = self.node_map[self.from_node]
-                from_node.OHT = None
+                # from_node.OHT = None
             return
 
 
@@ -330,14 +320,14 @@ class OHT():
                     self.acc = emergency_coeff * (-self.speed / time_step) + (1-emergency_coeff) * (-3500)
                     return
                 
-        if self.node_map[edge.dest].OHT is not None:
-            dist_diff = edge.length - self.from_dist
+        # if self.node_map[edge.dest].OHT is not None:
+        #     dist_diff = edge.length - self.from_dist
             
-            if 0 < dist_diff < self.rect:
-                emergency_coeff = 1.0 * (dist_diff < emergency_threshold)
-                self.acc = emergency_coeff * (-self.speed / time_step) + (1-emergency_coeff) * (-3500)
+        #     if 0 < dist_diff < self.rect:
+        #         emergency_coeff = 1.0 * (dist_diff < emergency_threshold)
+        #         self.acc = emergency_coeff * (-self.speed / time_step) + (1-emergency_coeff) * (-3500)
 
-                return
+        #         return
               
         if len(self.path) > 0:
             next_edge = self.edge_map[self.path[0]]
@@ -395,7 +385,7 @@ class AMHS:
 
 
         for node in self.nodes:
-            node.OHT = None
+            # node.OHT = None
             self.node_map[node.id] = node
             
         self.edges = copy.deepcopy(edges)
@@ -491,7 +481,7 @@ class AMHS:
                 edge_map = self.edge_map,
                 port_map = self.port_map
             )
-            start_node.OHT = oht
+            # start_node.OHT = oht
             self.OHTs.append(oht)
             
     def set_initial_OHTs(self, oht_list):
@@ -510,7 +500,7 @@ class AMHS:
                 edge_map = self.edge_map,
                 port_map = self.port_map
             )
-            start_node.OHT = oht
+            # start_node.OHT = oht
             self.OHTs.append(oht)
             i = i+1
     
@@ -534,8 +524,8 @@ class AMHS:
                 oht_origin.cal_pos(self.time_step)
                 return
             
-        elif oht_origin.from_dist == 0:
-            self.node_map[oht_origin.from_node].OHT = oht_origin;
+        # elif oht_origin.from_dist == 0:
+            # self.node_map[oht_origin.from_node].OHT = oht_origin
             
         oht_origin.speed = oht_new['speed']
         oht_origin.status = oht_new['status']
@@ -623,8 +613,8 @@ class AMHS:
         for edge in self.edges:
             edge.OHTs.sort(key = lambda oht : -oht.from_dist)
             
-        for node in self.nodes:
-            node.OHT = None
+        # for node in self.nodes:
+        #     node.OHT = None
     
     def generate_job(self):
         for _ in range(500):
@@ -681,7 +671,7 @@ class AMHS:
         if oht.path:
             if not oht.edge:
                 oht.edge = oht.path.pop(0)
-                self.node_map[oht.from_node].OHT = None
+                # self.node_map[oht.from_node].OHT = None
                 if oht not in self.edge_map[oht.edge].OHTs:
                     self.edge_map[oht.edge].OHTs.append(oht)
                             
@@ -792,7 +782,7 @@ class AMHS:
             for oht in self.OHTs:
                 oht.move(time_step, current_time)
 
-            self.update_edge_metrics(current_time, time_window=600)
+            self.update_edge_metrics(current_time, time_window=60)
             
             for oht in self.OHTs:
                 oht.cal_pos(time_step)
@@ -874,7 +864,7 @@ class AMHS:
             if self.stop_simulation_event.is_set():
                 break
             
-            if count % 5 == 0:
+            if count % 100 == 0:
                 self.generate_job()
             
             self.assign_jobs()
@@ -882,7 +872,7 @@ class AMHS:
             for oht in self.OHTs:
                 oht.move(time_step, _current_time)
 
-            self.update_edge_metrics(_current_time, time_window=600)
+            self.update_edge_metrics(_current_time, time_window=60)
             
             for oht in self.OHTs:
                 oht.cal_pos(time_step)
@@ -915,7 +905,7 @@ class AMHS:
             for oht in self.OHTs:
                 oht.move(time_step, _current_time)
 
-            self.update_edge_metrics(_current_time, time_window=600)
+            self.update_edge_metrics(_current_time, time_window=60)
             
             for oht in self.OHTs:
                 oht.cal_pos(time_step)
@@ -1003,7 +993,7 @@ class AMHS:
             for oht in self.OHTs:
                 oht.move(time_step, current_time)
 
-            self.update_edge_metrics(current_time, time_window=600)
+            self.update_edge_metrics(current_time, time_window=60)
             
             for oht in self.OHTs:
                 oht.cal_pos(time_step)
