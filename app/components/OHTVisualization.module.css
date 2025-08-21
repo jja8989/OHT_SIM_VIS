@@ -37,3 +37,7 @@
     border-radius: 5px;
     border: 1px solid #ccc;
 }
+
+.rail {
+  transition: stroke 120ms linear; 
+}

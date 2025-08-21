@@ -148,6 +148,25 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
     const [showModal, setShowModal] = useState(false);
 
+    type OHTState = {
+    sx: number; sy: number;
+    tx: number; ty: number;
+    s: number;   
+    vs: number;  
+    };
+    const ohtStatesRef = useRef<Map<string, OHTState>>(new Map());
+
+    const prevTimeRef = useRef<number>(performance.now());
+    const stepSyncRef = useRef<null | {
+    ids: Set<string>;
+    t0: number;
+    dur: number;   // 스텝 길이(보기 좋은 리듬용; 종료는 s로 판단)
+    done: boolean;
+    }>(null);
+
+    const railNodeMapRef = useRef<Map<string, SVGLineElement>>(new Map());
+    const railDataMapRef = useRef<Map<string, Rail>>(new Map());
+
 
 
     const handleTimeChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -256,6 +275,11 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                     };
                     setSelectedRail({ rail: d, ...midpoint });
                 }
+            })
+            .each(function(d: Rail) {
+                const key = `${d.from}-${d.to}`;
+                railNodeMapRef.current.set(key, this as SVGLineElement);
+                railDataMapRef.current.set(key, d); 
             });
 
 
@@ -309,7 +333,6 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
 
         processTimeStepRef.current = () => {
-
             if (!isInitialBufferReady.current) {
                 rafId.current = requestAnimationFrame(processTimeStepRef.current);
                 return;
@@ -317,87 +340,174 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
             setIsLoading(false);
 
-            const ohtData = ohtQueueRef.current.shift();
-            const edgeData = edgeQueueRef.current.shift();
+            if (!stepSyncRef.current) {
+                const ohtData = ohtQueueRef.current.shift();
+                const edgeData = edgeQueueRef.current.shift();
 
-
-            if (ohtQueueRef.current.length === 0 || edgeQueueRef.current.length === 0) {
+                if (!ohtData || !edgeData) {
                 setTimeout(() => {
                     rafId.current = requestAnimationFrame(processTimeStepRef.current);
                 }, 1000);
                 return;
+                }
+
+                const { time: ohtTime, updates: ohtUpdates } = ohtData;
+                const { time: edgeTime, updates: edgeUpdates } = edgeData;
+
+                simulTime.current = ohtTime;                 
+                lastOHTPositions.current = ohtUpdates;       
+                edgeUpdates.forEach((e: Rail) => {           
+                    lastEdgeStates.current.set(`${e.from}-${e.to}`, e);
+                });
+
+                const ids = new Set<string>(ohtUpdates.map((o: any) => String(o.id)));
+                const yScale = yScaleRef.current;
+
+                let sumDist = 0, cnt = 0;
+
+                ohtUpdates.forEach((u: any) => {
+                const id = String(u.id);
+                let sel = d3.select(`#oht-${id}`);
+
+                if (sel.empty()) {
+                    sel = d3.select(gRef.current!)
+                    .append("circle")
+                    .attr("id", `oht-${id}`)
+                    .attr("class", "oht")
+                    .attr("r", 5)
+                    .attr("cx", yScale(u.x))
+                    .attr("cy", yScale(u.y));
+                }
+
+                const sx = +sel.attr("cx");
+                const sy = +sel.attr("cy");
+                const tx = yScale(u.x);
+                const ty = yScale(u.y);
+
+                ohtStatesRef.current.set(id, { sx, sy, tx, ty, s: 0, vs: 0 });
+
+                sumDist += Math.hypot(tx - sx, ty - sy);
+                cnt++;
+
+                sel.attr("fill", getColorByStatus(u.status));
+                });
+
+                const avgDist = cnt ? sumDist / cnt : 0;
+                const MS_PER_PX = 4.0;  
+                const MIN_T = 100, MAX_T = 300;
+                const ANIM_T = Math.max(MIN_T, Math.min(MAX_T, avgDist * MS_PER_PX));
+
+
+                for (const u of edgeUpdates) {
+                const key = `${u.from}-${u.to}`;
+                const rail = railDataMapRef.current.get(key);
+                const node = railNodeMapRef.current.get(key);
+                if (!rail || !node) continue;
+
+                rail.count = u.count;
+                rail.avg_speed = u.avg_speed;
+
+                const sel = d3.select(node);
+                if (sel.classed('removed')) {
+                    node.setAttribute('stroke', 'gray');
+                    continue;
+                }
+
+                const value = (displayModeRef.current === 'count')
+                    ? rail.count / 100
+                    : (rail.max_speed - rail.avg_speed) / rail.max_speed;
+                const nextColor = colorScale(Math.max(0, Math.min(1, value)));
+                node.setAttribute('stroke', nextColor);
+                }
+
+                stepSyncRef.current = {
+                ids,
+                t0: performance.now(),
+                dur: ANIM_T,
+                done: false,
+                };
             }
 
-            const { time: ohtTime, updates: ohtUpdates } = ohtData;
-            const { time: edgeTime, updates: edgeUpdates } = edgeData;
+            const now = performance.now();
+            let dt = (now - prevTimeRef.current) / 1000; 
+            prevTimeRef.current = now;
+            dt = Math.min(dt, 1 / 30);
 
-            simulTime.current = ohtTime;
+            const omega = 18; 
+            const zeta  = 1.0;
 
-            lastOHTPositions.current = ohtUpdates;
-            
-            edgeUpdates.forEach((updatedEdge: Rail) => {
-                lastEdgeStates.current.set(`${updatedEdge.from}-${updatedEdge.to}`, updatedEdge);
+            ohtStatesRef.current.forEach((st, id) => {
+
+                const a = -2 * zeta * omega * st.vs + (omega * omega) * (1 - st.s);
+                st.vs += a * dt;
+                st.s  += st.vs * dt;
+
+
+                if (st.s >= 1) { st.s = 1; st.vs = 0; }
+                else if (st.s <= 0) { st.s = 0; st.vs = 0; }
+                const x = st.sx + (st.tx - st.sx) * st.s;
+                const y = st.sy + (st.ty - st.sy) * st.s;
+                d3.select(`#oht-${id}`).attr("cx", x).attr("cy", y);
             });
-
-            let pendingOHTTransitions = ohtUpdates.length;
-
-            ohtUpdates.forEach((updatedOHT) => {
-                const oht = d3.select(`#oht-${updatedOHT.id}`)
-                            .data(ohtUpdates);
-
-                if (oht.empty()) {
-                    g.append("circle")
-                        .attr("id", `oht-${updatedOHT.id}`)
-                        .attr("class", "oht")
-                        .attr("cx", yScale(updatedOHT.x))
-                        .attr("cy", yScale(updatedOHT.y))
-                        .attr("r", 5)
-                        .attr("fill", getColorByStatus(updatedOHT.status));
-
-                        pendingOHTTransitions--;                      
-                        if (pendingOHTTransitions === 0) {
-                            processEdgesForTime(edgeUpdates);
-                        }
-                }
-
-                else{
-                    oht.transition()
-                    .duration(50)
-                    .ease(d3.easeLinear) 
-                    .attr("cx", yScale(updatedOHT.x))
-                    .attr("cy", yScale(updatedOHT.y))
-                    .attr("fill", getColorByStatus(updatedOHT.status))
-                    .on("end", () => {
-                        pendingOHTTransitions--;                      
-                        if (pendingOHTTransitions === 0) {
-                            processEdgesForTime(edgeUpdates);
-                        }
-                    });
-                }
+            const sync = stepSyncRef.current;
+            if (sync && !sync.done) {
+                const elapsed = now - sync.t0;
+                let allArrived = true;
+                sync.ids.forEach(id => {
+                const st = ohtStatesRef.current.get(id);
+                if (!st) return;
+                if (st.s < 0.999) allArrived = false;
                 });
-                
-            if (Number(maxTimeref.current.value) - ohtTime <= 0.3){
+
+                if (elapsed >= sync.dur || allArrived) {
+                sync.ids.forEach(id => {
+                    const st = ohtStatesRef.current.get(id);
+                    if (!st) return;
+                    st.s = 1; st.vs = 0;
+                    d3.select(`#oht-${id}`).attr("cx", st.tx).attr("cy", st.ty);
+                });
+                sync.done = true;
+                stepSyncRef.current = null; 
+                }
+            }
+
+            rafId.current = requestAnimationFrame(processTimeStepRef.current);
+
+
+            if (Number(maxTimeref.current.value) - simulTime.current <= 0.3) {
                 setIsRunning(false);
                 return;
             }
             };
 
-        const processEdgesForTime = (edgeUpdates: any[]) => {
-                edgeUpdates.forEach((updatedEdge) => {
-                    const rail = railsRef.current.find(
-                        (r) => r.from === updatedEdge.from && r.to === updatedEdge.to
-                    );
-        
-                    if (rail) {
-                        rail.count = updatedEdge.count;
-                        rail.avg_speed = updatedEdge.avg_speed;
-                        updateRailColor(rail);
-                    }
-                });
-                       
-                rafId.current = requestAnimationFrame(processTimeStepRef.current);
+        function processEdgesForTime(edgeUpdates: any[]) {
+            const railNodeMap = railNodeMapRef.current;
+            const railDataMap = railDataMapRef.current;
 
-            };
+            for (const u of edgeUpdates) {
+                const key = `${u.from}-${u.to}`;
+                const rail = railDataMap.get(key);
+                const node = railNodeMap.get(key);
+                if (!rail || !node) continue;
+
+                rail.count = u.count;
+                rail.avg_speed = u.avg_speed;
+
+                const sel = d3.select(node);
+                if (sel.classed('removed')) {
+                node.setAttribute('stroke', 'gray');
+                continue;
+                }
+
+                const value = (displayModeRef.current === 'count')
+                ? rail.count / 100
+                : (rail.max_speed - rail.avg_speed) / rail.max_speed;
+                const nextColor = colorScale(Math.max(0, Math.min(1, value)));
+
+                node.setAttribute('stroke', nextColor);
+            }
+            }
+
         
         socket.on('updateOHT', handleOHTUpdate);
 
@@ -461,24 +571,24 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     
 
     const updateRailColor = (rail: Rail) => {
-        const selectedRail = d3.selectAll('.rail')
-            .filter((d: Rail) => d.from === rail.from && d.to === rail.to)
+        const key = `${rail.from}-${rail.to}`;
+        const node = railNodeMapRef.current.get(key);
+        if (!node) return;
 
-        const isRemoved = selectedRail.classed('removed');
-        if (isRemoved) {
-            selectedRail
-            .attr('stroke', 'gray')
+        const sel = d3.select(node);
+        if (sel.classed('removed')) {
+            node.setAttribute('stroke', 'gray');
             return;
         }
-    
-        const value = displayModeRef.current === 'count' 
-            ? rail.count / 100 
-            : (rail.max_speed-rail.avg_speed) / rail.max_speed;
 
-        selectedRail.transition()
-            .duration(50)
-            .attr('stroke', colorScale(Math.max(0, Math.min(1, value))))
-    };
+        const value = displayModeRef.current === 'count'
+            ? rail.count / 100
+            : (rail.max_speed - rail.avg_speed) / rail.max_speed;
+
+        const nextColor = colorScale(Math.max(0, Math.min(1, value)));
+
+        node.setAttribute('stroke', nextColor);
+        };
 
     const modiRail = () => {
 
@@ -580,18 +690,11 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             ohtBuffer = await selectedOhtFile.arrayBuffer();
         }
 
-        // const jobBuffer = await selectedJobFile.arrayBuffer();
-        // const ohtBuffer = await selectedOhtFile.arrayBuffer();
-
         socket.emit('uploadFiles', {
             job_file: jobBuffer,
             oht_file: ohtBuffer
         });
 
-
-        // console.log(selectedOhtFile);
-
-        // socket.emit('uploadFiles', formData); 
 
         socket.on('filesProcessed', (data) => {
             console.log('Files successfully uploaded:', data);

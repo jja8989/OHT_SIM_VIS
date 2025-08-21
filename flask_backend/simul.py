@@ -138,7 +138,7 @@ class OHT():
         self.edge = path.pop(0) if path else None 
         
         self.pos = (
-            from_node.coord + self.edge_map[self.edge.unit_vec] * self.from_dist
+            from_node.coord + self.edge_map[self.edge].unit_vec * self.from_dist
             if self.edge else from_node.coord
         ) 
         
@@ -316,11 +316,6 @@ class OHT():
         emergency_threshold = 1000
 
         OHTs = edge.OHTs
-        
-        if len(self.path)==0 and self.from_dist == edge.length:
-            self.speed = 0
-            self.acc = 0
-            return
                 
         if len(OHTs) > 1:
             index = OHTs.index(self)
@@ -372,26 +367,14 @@ class OHT():
                 other_diff= self.edge_map[other_oht.edge].length - other_oht.from_dist 
                 dist_diff = rem_diff + other_diff
                 if 0 < dist_diff < 3 * self.rect and rem_diff > other_diff:
-                    # self.acc = -3500
-                    
-                    # if self.speed == 0:
-                    #     self.acc = 0
                     
                     emergency_coeff = 1.0 * (dist_diff < emergency_threshold or self.speed == 0)
                     self.acc = emergency_coeff * (-self.speed / time_step) + (1-emergency_coeff) * (-3500)
-
-
-                    # self.acc = -self.speed/time_step 
                     return
                 elif rem_diff == other_diff and self.id > other_oht.id: 
                     
                     emergency_coeff = 1.0 * (dist_diff < emergency_threshold or self.speed == 0)
                     self.acc = emergency_coeff * (-self.speed / time_step) + (1-emergency_coeff) * (-3500)
-                    # self.acc = -self.speed/time_step 
-                    # self.acc = -3500    
-                    # if self.speed == 0:
-                        # self.acc = 0
-
                     return
             except:
                 pass
@@ -819,7 +802,7 @@ class AMHS:
                 self.queue.put(edge_data)
                 last_saved_time += 10
                 
-            if count % 1 == 0:
+            if count % 5 == 0:
                 for oht in self.OHTs:
                     oht_positions.append({
                         'id': oht.id,

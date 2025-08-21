@@ -13,6 +13,7 @@ import time
 import pandas as pd
 import io
 from config import DATABASE_URL
+from queue import Empty  
 
 user_sessions = {}
 client_id_to_sid = {}
@@ -60,7 +61,7 @@ def create_simulation_table(simulation_id):
 
 def clear_future_edge_data(sid, simulation_id, simulation_time):
     formatted_time = format_simulation_time(simulation_time) 
-    
+
     last_saved_time = user_sessions[sid].get('last_saved_time', 0)
 
     conn = get_db_connection()
@@ -487,7 +488,6 @@ def stop_Back_simulation():
     back_amhs = user_sessions[sid]['back_amhs']
     stop_saving_back_event = user_sessions[sid].get('stop_saving_back_event', None)
 
-
     back_amhs.back_stop_simulation_event.set()
     stop_saving_back_event.set()  
     socketio.emit('simulationBackStopped', to=sid) 
@@ -506,7 +506,7 @@ def handle_rail_update(data):
     removed_rail_key = data['removedRailKey']
     oht_positions = data['ohtPositions']
     is_removed = data['isRemoved']
-    current_time = data['currentTime'] 
+    current_time = data['currentTime']
     edge_data = data['edges']
     
     amhs.simulation_running = False
@@ -541,7 +541,15 @@ def restart_simulation(sid, amhs, current_time):
         amhs.stop_simulation_event.set()
         while amhs.simulation_running:
             socketio.sleep(0.01) 
-        return
+        # return
+        
+    try:
+        while not amhs.queue.empty():
+            amhs.queue.get_nowait()
+    except Empty:
+        pass
+    
+    # amhs.queue.clear()
     
     amhs.start_simulation(socketio, sid, current_time, max_time)    
     

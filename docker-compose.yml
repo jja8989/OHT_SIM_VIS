@@ -3,7 +3,6 @@ version: '3.8'
 services:
   frontend:
     build: ./
-
     expose:
       - "3000"
     ports:
@@ -38,14 +37,10 @@ services:
   db:
     image: postgres:latest
     restart: always
-
-
     expose:
-     - "5432"
-    
+     - "5432"    
     env_file:
       - .env
-    
     volumes:
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
