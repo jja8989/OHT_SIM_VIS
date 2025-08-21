@@ -762,18 +762,52 @@ class AMHS:
         self.simulation_running = True
         self.stop_simulation_event.clear()
         
+        
+        _current_time = 0
+        
         count = 0
-        edge_metrics_cache = {} 
         
         last_saved_time = -10
 
-        while current_time < max_time:
+
+        while _current_time < current_time:
+            if self.stop_simulation_event.is_set():
+                break
+            
+            if count % 100 == 0:
+                self.generate_job()
+            
+            self.assign_jobs()
+            
+            for oht in self.OHTs:
+                oht.move(time_step, _current_time)
+
+            self.update_edge_metrics(_current_time, time_window=60)
+            
+            for oht in self.OHTs:
+                oht.cal_pos(time_step)
+
+            if _current_time - last_saved_time > 10:
+                edge_data = [(last_saved_time+10, edge.id, edge.avg_speed) for edge in self.edges]
+                self.queue.put(edge_data)
+                last_saved_time += 10
+                
+            self.current_time = _current_time
+
+            _current_time += time_step*10
+            count += 1
+            
+        
+        edge_metrics_cache = {} 
+        
+
+        while current_time <= max_time:
             if self.stop_simulation_event.is_set():
                 break
             
             self.current_time = current_time
             
-            if count % 5 == 0:
+            if count % 100 == 0:
                 self.generate_job()
             self.assign_jobs()
                 
@@ -837,31 +871,26 @@ class AMHS:
         self.simulation_running = False
         print('Simulation ended')
         
-        
-    
-    def accelerate_simul(self, socketio, sid, current_time, max_time = 4000, time_step = 0.1):
-     
-        if self.simulation_running:
+    def only_simulation(self, socketio, sid, current_time, max_time = 4000, time_step = 0.1):
+
+        if self.back_simulation_running:
             print("Simulation is already running. Stopping the current simulation...")
-            self.stop_simulation_event.set()
-            while self.simulation_running:
+            self.back_stop_simulation_event.set()
+            while self.back_simulation_running:
                 socketio.sleep(0.01) 
             return
-        
-        self.simulation_running = True
-        self.stop_simulation_event.clear()
+                
+        self.back_simulation_running = True
+        self.back_stop_simulation_event.clear()
         
         _current_time = 0
         
         count = 0
         
-        accel_factor = 10
-        
         last_saved_time = -10
 
-
         while _current_time < current_time:
-            if self.stop_simulation_event.is_set():
+            if self.back_stop_simulation_event.is_set():
                 break
             
             if count % 100 == 0:
@@ -879,7 +908,7 @@ class AMHS:
 
             if _current_time - last_saved_time > 10:
                 edge_data = [(last_saved_time+10, edge.id, edge.avg_speed) for edge in self.edges]
-                self.queue.put(edge_data)
+                self.back_queue.put(edge_data)
                 last_saved_time += 10
                 
             self.current_time = _current_time
@@ -889,103 +918,14 @@ class AMHS:
             
         
         edge_metrics_cache = {} 
-            
-        
-        while _current_time < max_time:
-            if self.stop_simulation_event.is_set():
-                break
-            
-            if count % 5 == 0:
-                self.generate_job()
-            self.assign_jobs()
 
-            self.current_time = _current_time
-            
-            oht_positions = []
-            for oht in self.OHTs:
-                oht.move(time_step, _current_time)
-
-            self.update_edge_metrics(_current_time, time_window=60)
-            
-            for oht in self.OHTs:
-                oht.cal_pos(time_step)
-                
-            
-            if _current_time - last_saved_time > 10:
-                edge_data = [(last_saved_time+10, edge.id, edge.avg_speed) for edge in self.edges]
-                self.queue.put(edge_data)
-                last_saved_time += 10
-
-            if count % 1 == 0:
-                for oht in self.OHTs:
-                    oht_positions.append({
-                        'id': oht.id,
-                        'x': oht.pos[0],
-                        'y': oht.pos[1],
-                        'source': self.edge_map[oht.edge].source if oht.edge else None,
-                        'dest': self.edge_map[oht.edge].dest if oht.edge else None,
-                        'speed': oht.speed,
-                        'status': oht.status,
-                        'startPort': oht.start_port if oht.start_port else None,
-                        'endPort': oht.end_port if oht.end_port else None,
-                        'from_node': oht.from_node if oht.from_node else None,
-                        'from_dist': oht.from_dist,
-                        'wait_time': oht.wait_time
-                    })
-
-
-                updated_edges = []
-                for edge in self.edges:
-                    key = f"{edge.source}-{edge.dest}"
-                    new_metrics = {"count": edge.count, "avg_speed": edge.avg_speed}
-                    if edge_metrics_cache.get(key) != new_metrics:
-                        edge_metrics_cache[key] = new_metrics
-                        updated_edges.append({
-                            "from": edge.source,
-                            "to": edge.dest,
-                            **new_metrics
-                        })
-
-                payload = {
-                    'time': current_time,
-                    'oht_positions': oht_positions,
-                    'edges': updated_edges
-                }
-
-                compressed_payload = compress_data(payload)
-                socketio.emit('updateOHT', {'data': compressed_payload}, to=sid)
-
-            current_time += time_step
-            count += 1
-
-        self.simulation_running = False
-        print('Simulation ended')
-        
-        
-    def only_simulation(self, socketio, sid, current_time, max_time = 4000, time_step = 0.1):
-
-        if self.back_simulation_running:
-            print("Simulation is already running. Stopping the current simulation...")
-            self.back_stop_simulation_event.set()
-            while self.back_simulation_running:
-                socketio.sleep(0.01) 
-            return
-                
-        self.back_simulation_running = True
-        self.back_stop_simulation_event.clear()
-        
-        last_saved_time = -10
-
-        
-        count = 0
-
-        while current_time < max_time:
+        while current_time <= max_time:
             if self.back_stop_simulation_event.is_set():
                 break
 
             self.current_time = current_time
             
-            if count % 5 == 0:
+            if count % 100 == 0:
                 self.generate_job()
             self.assign_jobs()
                 

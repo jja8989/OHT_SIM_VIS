@@ -237,7 +237,7 @@ def handle_file_upload(data):
     emit('filesProcessed', {"message": "Files successfully uploaded"}, to=sid)
     
 
-def run_simulation(sid, max_time):    
+def run_simulation(sid, current_time, max_time):    
     
     job_list = user_sessions[sid].get('job_list', [])
     oht_list = user_sessions[sid].get('oht_list', [])
@@ -246,27 +246,19 @@ def run_simulation(sid, max_time):
         num_oht = len(oht_list)
     else:
         num_oht = user_sessions[sid].get('num_OHTs', 500)
-    # num_oht = user_sessions[sid].get('num_OHTs', 500)
-
     
     amhs = AMHS(nodes=nodes, edges=edges, ports=ports, num_OHTs=num_oht, max_jobs=1000, job_list=job_list, oht_list=oht_list)
     user_sessions[sid]['amhs'] = amhs
-    amhs.start_simulation(socketio, sid, 0, max_time)
+    amhs.start_simulation(socketio, sid, current_time, max_time)
 
-    
-    
-    
 
 def save_edge_data(sid):    
     current_simulation_id = user_sessions[sid].get('current_simulation_id', None)
-    last_saved_time = user_sessions[sid].get('last_saved_time', -10)
     stop_saving_event = user_sessions[sid].get('stop_saving_event', None)
-
     amhs = user_sessions[sid].get('amhs', None)
-    
-    max_wait_time = 10
+
     waited_time = 0
-    while amhs is None and waited_time < max_wait_time:
+    while amhs is None and waited_time < 10:
         time.sleep(1)
         waited_time += 1
         amhs = user_sessions[sid].get('amhs', None)
@@ -275,101 +267,158 @@ def save_edge_data(sid):
         return
     
     stop_saving_event.clear()
+    batch_size = 500 
+    commit_interval = 1.0 
+    last_commit_time = time.time()
 
-    while current_simulation_id:
+    conn = get_db_connection()
+    cur = conn.cursor()
 
-        while amhs is not None and amhs.simulation_running and not stop_saving_event.is_set(): 
-            if not amhs.queue.empty():
-                edge_data = amhs.queue.get()
-                if edge_data:
-                    conn = get_db_connection()
-                    cur = conn.cursor()
+    try:
+        while current_simulation_id:
+            while amhs is not None and amhs.simulation_running and not stop_saving_event.is_set():
+                batch = []
+                while not amhs.queue.empty() and len(batch) < batch_size:
+                    edge_data = amhs.queue.get()
+                    if edge_data:
+                        batch.extend([
+                            (format_simulation_time(row[0]), row[1], row[2]) 
+                            for row in edge_data
+                        ])
+                
 
-
-                    formatted_data = [
-                        (format_simulation_time(row[0]), row[1], row[2]) for row in edge_data
-                    ]
-
+                if batch:
                     cur.executemany(f"""
                         INSERT INTO simulation_{current_simulation_id} (time, edge_id, avg_speed) 
                         VALUES (%s, %s, %s)
                         ON CONFLICT (time, edge_id) DO UPDATE SET avg_speed = EXCLUDED.avg_speed;
-                    """, formatted_data)
+                    """, batch)
 
+
+                if time.time() - last_commit_time >= commit_interval:
                     conn.commit()
-                    cur.close()
-                    conn.close()
-        
-        break 
+                    last_commit_time = time.time()
 
+                time.sleep(0.05) 
+
+            flush_batch = []
+            while not amhs.queue.empty():
+                edge_data = amhs.queue.get()
+                if edge_data:
+                    flush_batch.extend([
+                        (format_simulation_time(row[0]), row[1], row[2]) 
+                        for row in edge_data
+                    ])
+
+                if len(flush_batch) >= batch_size:
+                    cur.executemany(f"""
+                        INSERT INTO simulation_{current_simulation_id} (time, edge_id, avg_speed) 
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (time, edge_id) DO UPDATE SET avg_speed = EXCLUDED.avg_speed;
+                    """, flush_batch)
+                    conn.commit()
+                    flush_batch = []
+
+            if flush_batch:
+                cur.executemany(f"""
+                    INSERT INTO simulation_{current_simulation_id} (time, edge_id, avg_speed) 
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (time, edge_id) DO UPDATE SET avg_speed = EXCLUDED.avg_speed;
+                """, flush_batch)
+                conn.commit()
+
+            break 
+
+    finally:
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        
 def save_edge_data_back(sid):    
-        
     back_simulation_id = user_sessions[sid].get('back_simulation_id', None)
-    last_saved_time_back = user_sessions[sid].get('last_saved_time_back', -10)
     stop_saving_back_event = user_sessions[sid].get('stop_saving_back_event', None)
+    back_amhs = user_sessions[sid].get('back_amhs', None)
 
-    
-    back_amhs = user_sessions[sid].get('back_amhs', None)    
-
-    if back_simulation_id is None:
-        return
-
-    max_wait_time = 10
     waited_time = 0
-    while back_amhs is None and waited_time < max_wait_time:
+    while back_amhs is None and waited_time < 10:
         time.sleep(1)
         waited_time += 1
-        back_amhs = user_sessions[sid].get('back_amhs', None)    
-
+        back_amhs = user_sessions[sid].get('back_amhs', None)
 
     if back_amhs is None:
         return
     
     stop_saving_back_event.clear()
+    batch_size = 500  
+    commit_interval = 1.0 
+    last_commit_time = time.time()
 
-    while back_simulation_id:
-        while back_amhs is not None and back_amhs.back_simulation_running and not stop_saving_back_event.is_set():            
-            if not back_amhs.back_queue.empty():
-                edge_data = back_amhs.back_queue.get()
-                if edge_data:
-                    conn = get_db_connection()
-                    cur = conn.cursor()
+    conn = get_db_connection()
+    cur = conn.cursor()
 
-                    formatted_data = [
-                        (format_simulation_time(row[0]), row[1], row[2]) for row in edge_data
-                    ]
+    try:
+        while back_simulation_id:
 
+            while back_amhs is not None and back_amhs.back_simulation_running and not stop_saving_back_event.is_set():
+                batch = []
+                while not back_amhs.back_queue.empty() and len(batch) < batch_size:
+                    edge_data = back_amhs.back_queue.get()
+                    if edge_data:
+                        batch.extend([
+                            (format_simulation_time(row[0]), row[1], row[2]) 
+                            for row in edge_data
+                        ])
+                
+                if batch:
                     cur.executemany(f"""
                         INSERT INTO simulation_{back_simulation_id} (time, edge_id, avg_speed) 
                         VALUES (%s, %s, %s)
                         ON CONFLICT (time, edge_id) DO UPDATE SET avg_speed = EXCLUDED.avg_speed;
-                    """, formatted_data)
+                    """, batch)
 
+                if time.time() - last_commit_time >= commit_interval:
                     conn.commit()
-                    cur.close()
-                    conn.close()
-                
-            time.sleep(0.5)    
-        break
+                    last_commit_time = time.time()
 
+                time.sleep(0.05) 
+
+            flush_batch = []
+            while not back_amhs.back_queue.empty():
+                edge_data = back_amhs.back_queue.get()
+                if edge_data:
+                    flush_batch.extend([
+                        (format_simulation_time(row[0]), row[1], row[2]) 
+                        for row in edge_data
+                    ])
+
+                if len(flush_batch) >= batch_size:
+                    cur.executemany(f"""
+                        INSERT INTO simulation_{back_simulation_id} (time, edge_id, avg_speed) 
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (time, edge_id) DO UPDATE SET avg_speed = EXCLUDED.avg_speed;
+                    """, flush_batch)
+                    conn.commit()
+                    flush_batch = []
+
+
+            if flush_batch:
+                cur.executemany(f"""
+                    INSERT INTO simulation_{back_simulation_id} (time, edge_id, avg_speed) 
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (time, edge_id) DO UPDATE SET avg_speed = EXCLUDED.avg_speed;
+                """, flush_batch)
+                conn.commit()
+
+            break 
+
+    finally:
+        conn.commit()
+        cur.close()
+        conn.close()
 
     
-def accel_simulation(sid, current_time, max_time):    
-
-    job_list = user_sessions[sid].get('job_list', None)
-    oht_list = user_sessions[sid].get('oht_list', None)
-        
-    if oht_list:
-        num_oht = len(oht_list)
-    else:
-        num_oht = user_sessions[sid].get('num_OHTs', 500)
-
-    amhs = AMHS(nodes=nodes, edges=edges, ports=ports, num_OHTs=num_oht, max_jobs=1000, job_list = job_list, oht_list = oht_list)
-    user_sessions[sid]['amhs'] = amhs
-
-    amhs.accelerate_simul(socketio, sid, current_time, max_time)
-    
-def only_simulation(sid, max_time):    
+def only_simulation(sid, current_time, max_time):    
     
     job_list = user_sessions[sid].get('job_list', None)
     oht_list = user_sessions[sid].get('oht_list', None)
@@ -381,7 +430,7 @@ def only_simulation(sid, max_time):
     back_amhs = AMHS(nodes=nodes, edges=edges, ports=ports, num_OHTs=num_oht, max_jobs=1000, job_list = job_list, oht_list = oht_list)
     user_sessions[sid]['back_amhs'] = back_amhs
 
-    back_amhs.only_simulation(socketio, sid, 0, max_time)
+    back_amhs.only_simulation(socketio, sid, current_time, max_time)
     
     
 @socketio.on('startSimulation')
@@ -389,7 +438,7 @@ def start_simulation(data):
     sid = request.sid 
 
     max_time = data.get('max_time', 4000)
-    current_time = data.get('current_time', None)
+    current_time = data.get('current_time', 0)
     
     oht_list = user_sessions[sid].get('oht_list', [])
     if oht_list:
@@ -403,10 +452,8 @@ def start_simulation(data):
     
     user_sessions[sid]['amhs'] = None
 
-    if not current_time:
-        socketio.start_background_task(run_simulation, sid, max_time)
-    else:    
-        socketio.start_background_task(accel_simulation, sid, current_time, max_time)
+    socketio.start_background_task(run_simulation, sid, current_time, max_time)
+
         
     last_saved_time = -10
     user_sessions[sid]['last_saved_time'] = last_saved_time
@@ -430,13 +477,10 @@ def start_simulation(data):
 
 @socketio.on('onlySimulation')
 def start_only_simulation(data):
-    
     sid = request.sid 
 
-    back_amhs = None
-
     max_time = data.get('max_time', 4000)
-    current_time = data.get('current_time', None)
+    current_time = data.get('current_time', 0)
 
     oht_list = user_sessions[sid].get('oht_list', [])
     if oht_list:
@@ -448,9 +492,10 @@ def start_only_simulation(data):
     user_sessions[sid]['current_time'] = current_time
     user_sessions[sid]['num_OHTs'] = num_oht
 
-
-    socketio.start_background_task(only_simulation, sid, max_time)
+    user_sessions[sid]['back_amhs'] = None
     
+    socketio.start_background_task(only_simulation, sid, current_time, max_time)
+
     last_saved_time_back = -10
     
     user_sessions[sid]['last_saved_time_back'] = last_saved_time_back
@@ -461,9 +506,9 @@ def start_only_simulation(data):
     cur.execute("INSERT INTO simulation_metadata (description, start_time) VALUES (%s, %s) RETURNING simulation_id;", 
                 ("New simulation started", datetime.now()))
     back_simulation_id = cur.fetchone()[0]
-    conn.commit()
-    
     user_sessions[sid]['back_simulation_id'] = back_simulation_id
+    
+    conn.commit()
 
     create_simulation_table(back_simulation_id)
 
@@ -483,13 +528,13 @@ def stop_simulation():
     socketio.emit('simulationStopped', to=sid)
     
 @socketio.on('stopBackSimulation')
-def stop_Back_simulation():
+def stop_back_simulation():
     sid = request.sid
     back_amhs = user_sessions[sid]['back_amhs']
     stop_saving_back_event = user_sessions[sid].get('stop_saving_back_event', None)
 
     back_amhs.back_stop_simulation_event.set()
-    stop_saving_back_event.set()  
+    stop_saving_back_event.set()
     socketio.emit('simulationBackStopped', to=sid) 
 
 @socketio.on('modiRail')
@@ -501,7 +546,6 @@ def handle_rail_update(data):
 
     current_simulation_id = user_sessions[sid]['current_simulation_id']
     last_saved_time = user_sessions[sid]['last_saved_time']
-
 
     removed_rail_key = data['removedRailKey']
     oht_positions = data['ohtPositions']
@@ -516,7 +560,7 @@ def handle_rail_update(data):
     if amhs.simulation_running:
         amhs.stop_simulation_event.set()
         while amhs.simulation_running:
-            socketio.sleep(0.01) 
+            socketio.sleep(0.01)
             
     socketio.emit('simulationStopped', to=sid) 
     
@@ -529,7 +573,6 @@ def handle_rail_update(data):
     if current_simulation_id:
         clear_future_edge_data(sid, current_simulation_id, current_time)
     
-    
     socketio.start_background_task(restart_simulation, sid, amhs, current_time)
     socketio.start_background_task(save_edge_data, sid) 
 
@@ -541,7 +584,6 @@ def restart_simulation(sid, amhs, current_time):
         amhs.stop_simulation_event.set()
         while amhs.simulation_running:
             socketio.sleep(0.01) 
-        # return
         
     try:
         while not amhs.queue.empty():
@@ -549,28 +591,59 @@ def restart_simulation(sid, amhs, current_time):
     except Empty:
         pass
     
-    # amhs.queue.clear()
-    
     amhs.start_simulation(socketio, sid, current_time, max_time)    
     
+    
+@socketio.on('connect')
+def on_connect():
+    sid = request.sid
+    client_id = request.args.get('client_id')
+
+    if not client_id:
+        print(f"[WARN] client_id 없음: sid={sid}")
+        user_sessions[sid] = {}
+        return
+
+    # 이미 같은 client_id로 연결된 세션이 있을 때
+    if client_id in client_id_to_sid:
+        old_sid = client_id_to_sid[client_id]
+
+        # 기존 세션이 있으면 데이터 옮기고 삭제
+        if old_sid in user_sessions:
+            user_sessions[sid] = user_sessions[old_sid]
+            del user_sessions[old_sid]
+            print(f"[INFO] client_id={client_id} 세션 이동: {old_sid} -> {sid}")
+        else:
+            # 예전 sid가 user_sessions에 없으면 새로 생성
+            user_sessions[sid] = {}
+            print(f"[WARN] client_id={client_id} 매핑 꼬임: old_sid={old_sid} 세션 없음")
+
+    else:
+        # 처음 보는 client_id면 새 세션 시작
+        user_sessions[sid] = {}
+        print(f"[INFO] client_id={client_id} 새 세션 시작: sid={sid}")
+
+    # 항상 최신 sid로 업데이트
+    client_id_to_sid[client_id] = sid
+
+
+@socketio.on('disconnect')
+def on_disconnect():
+    sid = request.sid
+    client_id = request.args.get('client_id')
+
+    if client_id and sid in user_sessions:
+        client_id_to_sid[client_id] = user_sessions[sid]
+        del user_sessions[sid]
 
 @socketio.on('connect')
 def on_connect():
     sid = request.sid
-    client_id = request.args.get('client_id') 
-    
+    client_id = request.args.get('client_id')
+
     if client_id in client_id_to_sid:
         user_sessions[sid] = client_id_to_sid[client_id]
-        client_id_to_sid[client_id] = user_sessions[sid]
 
-@socketio.on('disconnect')
-def handle_disconnect():
-    sid = request.sid 
-    client_id = request.args.get('client_id') 
-    client_id_to_sid[client_id] = user_sessions[sid]
 
-    if sid in user_sessions:
-        del user_sessions[sid]
-    
 if __name__ == '__main__':
     socketio.run(app, host="0.0.0.0", port=5000, debug=True, allow_unsafe_werkzeug=True)

@@ -85,6 +85,8 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     const [acceleratedTime, setAcceleratedTime] = useState(0);
     const [isAccelEnabled, setIsAccelEnabled] = useState(false);
 
+
+
     const [isRunning, setIsRunning] = useState(false);
     const [isRunningBack, setIsRunningBack] = useState(false);
 
@@ -99,6 +101,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
     const [updated, setUpdated] = useState(false);
 
+    const stopAtRef = useRef<number>(maxTime);
     const simulTime = useRef(0);
 
 
@@ -317,12 +320,6 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             ohtQueueRef.current.push({ time, updates: oht_positions });
             edgeQueueRef.current.push({ time, updates: edges });
 
-
-            if (!isInitialBufferReady.current) {
-                if (ohtQueueRef.current.length >= initialBufferSize && edgeQueueRef.current.length >= initialBufferSize) {
-                    isInitialBufferReady.current = true;
-                }
-            }
         };
 
         const getColorByStatus = (status: string) => {
@@ -333,16 +330,10 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
 
         processTimeStepRef.current = () => {
-            if (!isInitialBufferReady.current) {
-                rafId.current = requestAnimationFrame(processTimeStepRef.current);
-                return;
-            }
-
-            setIsLoading(false);
-
             if (!stepSyncRef.current) {
                 const ohtData = ohtQueueRef.current.shift();
                 const edgeData = edgeQueueRef.current.shift();
+
 
                 if (!ohtData || !edgeData) {
                 setTimeout(() => {
@@ -350,6 +341,8 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                 }, 1000);
                 return;
                 }
+
+                setIsLoading(false);
 
                 const { time: ohtTime, updates: ohtUpdates } = ohtData;
                 const { time: edgeTime, updates: edgeUpdates } = edgeData;
@@ -474,8 +467,10 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             rafId.current = requestAnimationFrame(processTimeStepRef.current);
 
 
-            if (Number(maxTimeref.current.value) - simulTime.current <= 0.3) {
+            if (stopAtRef.current - simulTime.current <= 0.5) {
+                console.log(simulTime.current)
                 setIsRunning(false);
+                if (rafId.current) { cancelAnimationFrame(rafId.current); rafId.current = null; }
                 return;
             }
             };
@@ -512,6 +507,8 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         socket.on('updateOHT', handleOHTUpdate);
 
         socket.on("backSimulationFinished", () => {
+            console.log('back ended')
+
             setIsRunningBack(false);
         });
     
@@ -523,10 +520,11 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
             cancelAnimationFrame(rafId.current);
             rafId.current = null;
+            socket.off("backSimulationFinished");
 
         };
 
-    }, [data]);
+    },[data]);
 
     const lightModeColors = {
         node: "red",
@@ -625,8 +623,6 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
             socket.disconnect();
 
-            isInitialBufferReady.current = false;
-
             if (rafId.current) {
                 cancelAnimationFrame(rafId.current);
                 rafId.current = null;
@@ -674,11 +670,6 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         console.log('Starting simulation');
         setIsLoading(true);
 
-        // const formData = new FormData();
-
-        // formData.append('oht_file', selectedOhtFile);
-        // formData.append('job_file', selectedJobFile);
-
         let jobBuffer = null;   
         let ohtBuffer = null;
 
@@ -700,6 +691,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             console.log('Files successfully uploaded:', data);
 
             maxTimeref.current.value = maxTime;
+            stopAtRef.current = maxTime;
             
             const simulationData = { max_time: maxTime, num_OHTs: ohtCount };
             if (isAccelEnabled) {
@@ -727,16 +719,26 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     
     };
 
-    const startBackSimulation = () => {
+    const startBackSimulation = async () => {
         console.log('Starting simulation');
         setIsRunningBack(true);
 
+        let jobBuffer = null;   
+        let ohtBuffer = null;
+
+        if (selectedJobFile) {
+            jobBuffer = await selectedJobFile.arrayBuffer();
+        }
+
+        if (selectedOhtFile) {
+            ohtBuffer = await selectedOhtFile.arrayBuffer();
+        }
         const formData = new FormData();
 
-        formData.append('oht_file', selectedOhtFile);
-        formData.append('job_file', selectedJobFile);
-
-        socket.emit('uploadFiles', formData);
+        socket.emit('uploadFiles', {
+            job_file: jobBuffer,
+            oht_file: ohtBuffer
+        });
 
         socket.on('filesProcessed', (data) => {
             console.log('Files successfully uploaded:', data);
@@ -761,10 +763,6 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                 OhtFileInputRef.current.value = "";
             }
 
-            if (!rafId.current) {
-                rafId.current = requestAnimationFrame(processTimeStepRef.current);
-            }
-
             socket.off('filesProcessed');
         });
     
@@ -780,8 +778,6 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     
 
         d3.selectAll('.oht').remove();
-
-        isInitialBufferReady.current = false;
 
         socket.disconnect();
         socket.connect();
