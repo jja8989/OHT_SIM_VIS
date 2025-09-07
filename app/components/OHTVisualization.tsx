@@ -1,10 +1,13 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import * as d3 from 'd3';
 import io from 'socket.io-client';
 import pako from 'pako';
 import { SunIcon, MoonIcon } from "@heroicons/react/24/outline"; 
 import Modal from "./Modal"; 
 import { getClientId } from '../utils/getClientId';
+import SimulationControls from "./SimulationControls";
+import TimeInput from "./TimeInput"; // 불러오기
+
 
 const client_id = getClientId();
 
@@ -16,8 +19,6 @@ const socket = io(process.env.NEXT_PUBLIC_SOCKET_URL || '/', {
         client_id: client_id,
       }
   });
-
-
 
 interface Node {
     id: string;
@@ -81,11 +82,9 @@ const decompressData = (compressedData: string) => {
                 
 
 const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
-    const [maxTime, setMaxTime] = useState(4000);
+    const [maxTime, setMaxTime] = useState(3600);
     const [acceleratedTime, setAcceleratedTime] = useState(0);
     const [isAccelEnabled, setIsAccelEnabled] = useState(false);
-
-
 
     const [isRunning, setIsRunning] = useState(false);
     const [isRunningBack, setIsRunningBack] = useState(false);
@@ -99,8 +98,6 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     const railsRef = useRef<Rail[]>(data.rails);
     const [selectedRail, setSelectedRail] = useState<{ rail: Rail; x: number; y: number } | null>(null);
 
-    const [updated, setUpdated] = useState(false);
-
     const stopAtRef = useRef<number>(maxTime);
     const simulTime = useRef(0);
 
@@ -109,9 +106,6 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     const displayModeRef = useRef(displayMode);
 
     const lastOHTPositions = useRef<OHT[]>([]);
-
-    const initialBufferSize = 100;
-    const isInitialBufferReady = useRef(false); 
     
     const lastEdgeStates = useRef<Map<string, Rail>>(new Map());
     const rafId = useRef(null);  
@@ -128,11 +122,8 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
     const [isLoading, setIsLoading] = useState(false); 
 
-    const ohtQueue: Array<{ time: number; updates: any[] }> = [];
-    const edgeQueue: Array<{ time: number; updates: any[] }> = [];
-
     const ohtQueueRef = useRef<Array<{ time: number; updates: any[] }>>([]);
-    const edgeQueueRef = useRef<Array<{ time: number; updates: any[] }>>([]);
+    const edgeQueueRef = useRef<Array<{ updates: any[] }>>([]);
 
     const yScaleRef = useRef<d3.ScaleLinear<number, number>>(d3.scaleLinear());
 
@@ -146,36 +137,30 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
 
     const [ohtCount, setOhtCount] = useState(500);
-    const ohtCountRef = useRef<HTMLInputElement | null>(null);
-
-
     const [showModal, setShowModal] = useState(false);
 
-    type OHTState = {
-    sx: number; sy: number;
-    tx: number; ty: number;
-    s: number;   
-    vs: number;  
-    };
-    const ohtStatesRef = useRef<Map<string, OHTState>>(new Map());
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [speedMultiplier, setSpeedMultiplier] = useState(1);
+    const speedMultiplierRef = useRef(speedMultiplier);
 
-    const prevTimeRef = useRef<number>(performance.now());
-    const stepSyncRef = useRef<null | {
-    ids: Set<string>;
-    t0: number;
-    dur: number;   // 스텝 길이(보기 좋은 리듬용; 종료는 s로 판단)
-    done: boolean;
-    }>(null);
 
     const railNodeMapRef = useRef<Map<string, SVGLineElement>>(new Map());
     const railDataMapRef = useRef<Map<string, Rail>>(new Map());
 
+    const speeds = [0.1, 0.25, 0.33, 0.5, 1, 2, 3, 4]; 
+    const [speedIndex, setSpeedIndex] = useState(4); 
+
+    const [currentSimulTime, setCurrentSimulTime] = useState(0);
 
 
-    const handleTimeChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-        setAcceleratedTime(Number(event.target.value));
-    };
 
+
+    function formatTime(secs: number) {
+    const h = String(Math.floor(secs / 3600)).padStart(2, "0");
+    const m = String(Math.floor((secs % 3600) / 60)).padStart(2, "0");
+    const s = String(Math.floor(secs % 60)).padStart(2, "0");
+    return `${h}:${m}:${s}`;
+    }
     const handleAccelChange = (event: React.ChangeEvent<HTMLInputElement>) => {
         setIsAccelEnabled(event.target.checked);
     };
@@ -194,6 +179,54 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         return Object.entries(obj).map(([key, value]) => `${key}: ${value}`).join('\n');
     };
 
+
+    const play = () => {
+    
+    d3.selectAll(".oht").interrupt();
+
+    if (!rafId.current) {
+        rafId.current = requestAnimationFrame(processTimeStepRef.current);
+    }
+    setIsPlaying(true);
+    };
+
+    const pause = () => {
+    d3.selectAll(".oht").interrupt();
+
+    if (rafId.current) {
+        cancelAnimationFrame(rafId.current);
+        rafId.current = null;
+    }
+
+    setIsPlaying(false);
+    };
+    
+
+    const faster = () => {
+        setSpeedIndex(prev => Math.min(prev + 1, speeds.length - 1))
+        d3.selectAll(".oht").interrupt();
+        setSpeedMultiplier(speeds[speedIndex])
+        if (!rafId.current) {
+            rafId.current = requestAnimationFrame(processTimeStepRef.current);
+        }
+    };
+    const slower = () => {
+        setSpeedIndex(prev => Math.max(prev - 1, 0))
+        d3.selectAll(".oht").interrupt();
+        setSpeedMultiplier(speeds[speedIndex])
+        if (!rafId.current) {
+            rafId.current = requestAnimationFrame(processTimeStepRef.current);
+        }
+    };
+
+
+    const trianglePath = useMemo(() => {
+        const base = 10;
+        const height = 14; // 좀 더 뾰족하게
+        return `M 0 -${height/2} L ${base/2} ${height/2} L -${base/2} ${height/2} Z`;
+        }, []);
+
+    
     useEffect(() => {
 
         const svg = d3.select(svgRef.current)
@@ -222,8 +255,6 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             rail.avg_speed = rail.max_speed;
         });
 
-
-        const maxX = d3.max(nodes, d => d.x) || 1;
         const maxY = d3.max(nodes, d => d.y) || 1;
 
         const yScale = d3.scaleLinear().domain([0, maxY]).range([0, 1200 - margin.top - margin.bottom]);
@@ -249,7 +280,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             tooltip.style('visibility', 'hidden');
         };
 
-        const railLines = g.selectAll('.rail')
+        g.selectAll('.rail')
             .data(rails)
             .enter()
             .append('line')
@@ -281,10 +312,11 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             })
             .each(function(d: Rail) {
                 const key = `${d.from}-${d.to}`;
-                railNodeMapRef.current.set(key, this as SVGLineElement);
-                railDataMapRef.current.set(key, d); 
-            });
 
+                railNodeMapRef.current.set(key, this as SVGLineElement);
+                railDataMapRef.current.set(key, d);
+
+            });
 
         g.selectAll('.node')
             .data(nodes)
@@ -297,6 +329,8 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             .attr('fill', 'red')
             .on('mouseover', (event, d) => showTooltip(event, objectToString(d)))
             .on('mouseout', hideTooltip);
+
+
 
         g.selectAll('.port')
             .data(ports)
@@ -318,190 +352,94 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             const { time, oht_positions, edges } = decompressedData;
 
             ohtQueueRef.current.push({ time, updates: oht_positions });
-            edgeQueueRef.current.push({ time, updates: edges });
+            edgeQueueRef.current.push({ updates: edges });
 
+            setIsLoading(false);
         };
-
-        const getColorByStatus = (status: string) => {
-            if (status === "STOP_AT_START") return "blue";
-            if (status === "STOP_AT_END") return "red";
-            return "orange";
-        };
-
 
         processTimeStepRef.current = () => {
-            if (!stepSyncRef.current) {
                 const ohtData = ohtQueueRef.current.shift();
-                const edgeData = edgeQueueRef.current.shift();
-
+                const edgeData = edgeQueueRef.current.shift();                    
 
                 if (!ohtData || !edgeData) {
-                setTimeout(() => {
                     rafId.current = requestAnimationFrame(processTimeStepRef.current);
-                }, 1000);
-                return;
+                    return;
                 }
 
                 setIsLoading(false);
 
                 const { time: ohtTime, updates: ohtUpdates } = ohtData;
-                const { time: edgeTime, updates: edgeUpdates } = edgeData;
-
-                simulTime.current = ohtTime;                 
-                lastOHTPositions.current = ohtUpdates;       
-                edgeUpdates.forEach((e: Rail) => {           
-                    lastEdgeStates.current.set(`${e.from}-${e.to}`, e);
-                });
-
-                const ids = new Set<string>(ohtUpdates.map((o: any) => String(o.id)));
-                const yScale = yScaleRef.current;
-
-                let sumDist = 0, cnt = 0;
-
-                ohtUpdates.forEach((u: any) => {
-                const id = String(u.id);
-                let sel = d3.select(`#oht-${id}`);
-
-                if (sel.empty()) {
-                    sel = d3.select(gRef.current!)
-                    .append("circle")
-                    .attr("id", `oht-${id}`)
-                    .attr("class", "oht")
-                    .attr("r", 5)
-                    .attr("cx", yScale(u.x))
-                    .attr("cy", yScale(u.y));
-                }
-
-                const sx = +sel.attr("cx");
-                const sy = +sel.attr("cy");
-                const tx = yScale(u.x);
-                const ty = yScale(u.y);
-
-                ohtStatesRef.current.set(id, { sx, sy, tx, ty, s: 0, vs: 0 });
-
-                sumDist += Math.hypot(tx - sx, ty - sy);
-                cnt++;
-
-                sel.attr("fill", getColorByStatus(u.status));
-                });
-
-                const avgDist = cnt ? sumDist / cnt : 0;
-                const MS_PER_PX = 4.0;  
-                const MIN_T = 100, MAX_T = 300;
-                const ANIM_T = Math.max(MIN_T, Math.min(MAX_T, avgDist * MS_PER_PX));
+                const { updates: edgeUpdates } = edgeData;
 
 
-                for (const u of edgeUpdates) {
-                const key = `${u.from}-${u.to}`;
-                const rail = railDataMapRef.current.get(key);
-                const node = railNodeMapRef.current.get(key);
-                if (!rail || !node) continue;
+                let pending = ohtUpdates.length;
 
-                rail.count = u.count;
-                rail.avg_speed = u.avg_speed;
+                const commitStep = () => {
+                    for (const u of (edgeUpdates ?? [])) {
+                    const key = `${u.from}-${u.to}`;
+                    const rail_data    = railDataMapRef.current.get(key);
+                    const rail_segment = railNodeMapRef.current.get(key);
+                    if (!rail_data || !rail_segment) continue;
 
-                const sel = d3.select(node);
-                if (sel.classed('removed')) {
-                    node.setAttribute('stroke', 'gray');
-                    continue;
-                }
+                    rail_data.count     = u.count;
+                    rail_data.avg_speed = u.avg_speed;
 
-                const value = (displayModeRef.current === 'count')
-                    ? rail.count / 100
-                    : (rail.max_speed - rail.avg_speed) / rail.max_speed;
-                const nextColor = colorScale(Math.max(0, Math.min(1, value)));
-                node.setAttribute('stroke', nextColor);
-                }
+                    const sel = d3.select(rail_segment);
+                    if (!sel.classed('removed')) {
+                        const value = (displayModeRef.current === 'count')
+                        ? rail_data.count / 100
+                        : (rail_data.max_speed - rail_data.avg_speed) / rail_data.max_speed;
+                        rail_segment.setAttribute('stroke', colorScale(Math.max(0, Math.min(1, value))));
+                    }
+                    }
 
-                stepSyncRef.current = {
-                ids,
-                t0: performance.now(),
-                dur: ANIM_T,
-                done: false,
+                    simulTime.current = ohtTime;
+                    lastOHTPositions.current = ohtUpdates;
+                    edgeUpdates.forEach((updatedEdge: Rail) => {
+                    lastEdgeStates.current.set(`${updatedEdge.from}-${updatedEdge.to}`, updatedEdge);
+                    });
+                    rafId.current = requestAnimationFrame(processTimeStepRef.current);
                 };
-            }
 
-            const now = performance.now();
-            let dt = (now - prevTimeRef.current) / 1000; 
-            prevTimeRef.current = now;
-            dt = Math.min(dt, 1 / 30);
+                const doneOne = () => {
+                    if (--pending === 0) commitStep();
+                };
 
-            const omega = 18; 
-            const zeta  = 1.0;
+                ohtUpdates.forEach((updatedOHT) => {
+                    const oht = d3.select(`#oht-${updatedOHT.id}`);
 
-            ohtStatesRef.current.forEach((st, id) => {
+                    const cx = yScale(updatedOHT.x);
+                    const cy = yScale(updatedOHT.y);
 
-                const a = -2 * zeta * omega * st.vs + (omega * omega) * (1 - st.s);
-                st.vs += a * dt;
-                st.s  += st.vs * dt;
+                    if (oht.empty()) {
+                        g.append("path")
+                            .attr("id", `oht-${updatedOHT.id}`)
+                            .attr("class", "oht")
+                            .attr("d", trianglePath)
+                            .attr("fill", getColorByStatus(updatedOHT.status))
+                            .attr("transform", `translate(${cx},${cy}) rotate(${updatedOHT.angleDeg})`);
+                            doneOne();
 
-
-                if (st.s >= 1) { st.s = 1; st.vs = 0; }
-                else if (st.s <= 0) { st.s = 0; st.vs = 0; }
-                const x = st.sx + (st.tx - st.sx) * st.s;
-                const y = st.sy + (st.ty - st.sy) * st.s;
-                d3.select(`#oht-${id}`).attr("cx", x).attr("cy", y);
-            });
-            const sync = stepSyncRef.current;
-            if (sync && !sync.done) {
-                const elapsed = now - sync.t0;
-                let allArrived = true;
-                sync.ids.forEach(id => {
-                const st = ohtStatesRef.current.get(id);
-                if (!st) return;
-                if (st.s < 0.999) allArrived = false;
+                        } 
+                        else{
+                        oht.transition()
+                            .duration(200 / speedMultiplierRef.current)
+                            .ease(d3.easeLinear)
+                            .attr("fill", getColorByStatus(updatedOHT.status))
+                            .attr("transform", `translate(${cx},${cy}) rotate(${updatedOHT.angleDeg})`)
+                            .on("end interrupt", doneOne);
+                        }
                 });
 
-                if (elapsed >= sync.dur || allArrived) {
-                sync.ids.forEach(id => {
-                    const st = ohtStatesRef.current.get(id);
-                    if (!st) return;
-                    st.s = 1; st.vs = 0;
-                    d3.select(`#oht-${id}`).attr("cx", st.tx).attr("cy", st.ty);
-                });
-                sync.done = true;
-                stepSyncRef.current = null; 
+                // isAfterCut.current = false;
+
+                if (stopAtRef.current - simulTime.current <= 1) {
+                    setIsRunning(false);
+                    setIsPlaying(false);
+                    if (rafId.current) { cancelAnimationFrame(rafId.current); rafId.current = null; }
+                    return;
                 }
-            }
-
-            rafId.current = requestAnimationFrame(processTimeStepRef.current);
-
-
-            if (stopAtRef.current - simulTime.current <= 0.5) {
-                setIsRunning(false);
-                if (rafId.current) { cancelAnimationFrame(rafId.current); rafId.current = null; }
-                return;
-            }
-            };
-
-        function processEdgesForTime(edgeUpdates: any[]) {
-            const railNodeMap = railNodeMapRef.current;
-            const railDataMap = railDataMapRef.current;
-
-            for (const u of edgeUpdates) {
-                const key = `${u.from}-${u.to}`;
-                const rail = railDataMap.get(key);
-                const node = railNodeMap.get(key);
-                if (!rail || !node) continue;
-
-                rail.count = u.count;
-                rail.avg_speed = u.avg_speed;
-
-                const sel = d3.select(node);
-                if (sel.classed('removed')) {
-                node.setAttribute('stroke', 'gray');
-                continue;
-                }
-
-                const value = (displayModeRef.current === 'count')
-                ? rail.count / 100
-                : (rail.max_speed - rail.avg_speed) / rail.max_speed;
-                const nextColor = colorScale(Math.max(0, Math.min(1, value)));
-
-                node.setAttribute('stroke', nextColor);
-            }
-            }
-
+                };
         
         socket.on('updateOHT', handleOHTUpdate);
 
@@ -525,6 +463,14 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
     },[data]);
 
+
+    const getColorByStatus = (status: string) => {
+        if (status === "STOP_AT_START") return "blue";
+        if (status === "STOP_AT_END") return "red";
+        return "orange";
+    };
+
+
     const lightModeColors = {
         node: "red",
         rail: (d: Rail) => colorScale(Math.max(0, Math.min(1, displayModeRef.current === 'count' ? d.count / 100 : (d.max_speed - d.avg_speed) / d.max_speed))),
@@ -541,15 +487,12 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         const colors = darkMode ? darkModeColors : lightModeColors;
 
         d3.selectAll(".node")
-            .transition().duration(500)
             .attr("fill", colors.node);
 
         d3.selectAll(".rail:not(.removed)")
-            .transition().duration(500)
             .attr("stroke", d => colors.rail(d));
 
         d3.selectAll(".port")
-            .transition().duration(500)
             .attr("fill", colors.port);
     };
     
@@ -565,6 +508,23 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
         updateColors();
     }, [darkMode]);
+
+    useEffect(() => {
+        speedMultiplierRef.current = speedMultiplier;
+    }, [speedMultiplier]);
+
+    useEffect(() => {
+        if (!isRunning) {
+            setCurrentSimulTime(0); // 실행 멈추면 바로 0 세팅
+            return;
+        }
+
+        const interval = setInterval(() => {
+            setCurrentSimulTime(simulTime.current);
+        }, 500);
+
+        return () => clearInterval(interval);
+        }, [isRunning]);
     
 
     const updateRailColor = (rail: Rail) => {
@@ -588,26 +548,33 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         };
 
     const modiRail = () => {
-
         if (rafId.current) {
             cancelAnimationFrame(rafId.current);
             rafId.current = null;
         }
 
         setIsLoading(true);
+
+
         if (selectedRail) {
+
+            socket.disconnect();
+            
+            ohtQueueRef.current = [];
+            edgeQueueRef.current = [];
+
             const currentTime = simulTime.current;
             const currentOHTPositions = lastOHTPositions.current;
             const currentEdgeStates = Array.from(lastEdgeStates.current.values());
-    
             const removedRailKey =  `${selectedRail.rail.from}-${selectedRail.rail.to}`;
 
-            const isRemoved = d3.selectAll('.rail')
-            .filter(d => d === selectedRail.rail)
-            .classed('removed');
+            const railElement = railNodeMapRef.current.get(removedRailKey);
 
-            d3.selectAll('.rail')
-            .filter(d => d === selectedRail.rail)
+            const sel = d3.select(railElement);
+
+            const isRemoved = sel.classed("removed");
+
+            sel
             .attr('stroke', () => {
                 if (isRemoved) {
                     const value = displayModeRef.current === 'count'
@@ -617,16 +584,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                 }
                 return 'gray';
             })
-            .classed('removed', !isRemoved); 
-
-
-            socket.disconnect();
-
-            if (rafId.current) {
-                cancelAnimationFrame(rafId.current);
-                rafId.current = null;
-            }
-
+            .classed('removed', !isRemoved);
 
             socket.once('connect', () => {
                 socket.emit('stopSimulation');
@@ -642,7 +600,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                 
                 ohtQueueRef.current = [];
                 edgeQueueRef.current = [];
-
+                
                 socket.emit('modiRail', {
                     removedRailKey,
                     ohtPositions: currentOHTPositions,
@@ -652,13 +610,10 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                 });
 
                 setIsRunning(true);
-                if (!rafId.current) {
-                    rafId.current = requestAnimationFrame(processTimeStepRef.current);
-                }    
+
                 socket.off('simulationStopped');
 
             });
-
             setSelectedRail(null);
             setIsRunning(true);
         }
@@ -708,6 +663,9 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                 OhtFileInputRef.current.value = "";
             }
             setIsRunning(true);
+            setIsPlaying(true);
+
+
 
             if (!rafId.current) {
                 rafId.current = requestAnimationFrame(processTimeStepRef.current);
@@ -732,7 +690,6 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         if (selectedOhtFile) {
             ohtBuffer = await selectedOhtFile.arrayBuffer();
         }
-        const formData = new FormData();
 
         socket.emit('uploadFiles', {
             job_file: jobBuffer,
@@ -810,6 +767,11 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
         d3.selectAll('.oht').remove();
         setIsLoading(false);
+        setIsPlaying(false);
+        setSpeedIndex(4);
+        setSpeedMultiplier(speeds[speedIndex]);
+        simulTime.current = 0;
+        setCurrentSimulTime(0);
         
         console.log('Simulation reset complete');
     };
@@ -857,6 +819,8 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             socket.off('simulationStopped');
 
         });
+        simulTime.current = 0;
+        setCurrentSimulTime(0);
 
     };
 
@@ -1001,9 +965,42 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                         </button>
                     )}
                 </div>
-            </main>
+                   <div className="absolute bottom-4 right-4 z-50">
+  <div className="flex flex-col items-center gap-3 px-3 py-3
+                  bg-transparent
+                  border border-gray-300/40 dark:border-gray-600/40
+                  rounded-md shadow-sm
+                  text-xs">
+    <SimulationControls
+      isPlaying={isPlaying}
+      onPlay={play}
+      onPause={pause}
+      onFaster={faster}
+      onSlower={slower}
+    />
 
+    <div className="flex items-center gap-1">
+      <span className="text-gray-600 dark:text-gray-300">⚡</span>
+      <span className="font-mono text-sm text-gray-900 dark:text-white">
+        x{speeds[speedIndex]}
+      </span>
+    </div>
+
+    <div className="flex flex-col items-center gap-2 mt-2">
+      <div className="flex items-center gap-1">
+        <span className="text-gray-600 dark:text-gray-300">⏱</span>
+        <span className="font-mono text-sm text-gray-900 dark:text-white">
+          {formatTime(currentSimulTime)}
+        </span>
+      </div>
+    </div>
+  </div>
+</div>
+
+            </main>
             <footer className={`flex flex-col md:flex-row items-center justify-between p-4 ${darkMode ? "bg-[#1E293B]" : "bg-[#E2E8F0]"} shadow-lg`}>
+
+           
                 <div className="flex flex-col md:flex-row gap-6 items-center">
                     <div className="flex flex-col items-center gap-4">
                         <span className="text-sm font-semibold">OHT Mode</span>
@@ -1054,37 +1051,34 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
                     {isAccelEnabled && (
                         <div className="flex flex-col items-center gap-3">
-                            <label htmlFor="accel-time-input" className="text-sm font-semibold">
-                                Acceleration Time
-                            </label>
-                            <input
-                                ref={accTimeref}
-                                id="accel-time-input"
-                                type="number"
-                                value={acceleratedTime}
-                                onChange={handleTimeChange}
-                                className={`p-2 rounded-md border ${darkMode ? "border-gray-600 bg-gray-700 text-white" : "border-gray-400 bg-white text-black"} 
-                                focus:outline-none focus:ring focus:ring-blue-500 w-32 text-center`}
-                                placeholder="Enter time"
-                            />
+                        <label className="text-sm font-semibold">Acceleration Time</label>
+                        <TimeInput
+                            ref={accTimeref}
+                            value={acceleratedTime}
+                            onChange={setAcceleratedTime}
+                            className={
+                            darkMode
+                                ? "border-gray-600 bg-gray-700 text-white"
+                                : "border-gray-400 bg-white text-black"
+                            }
+                        />
                         </div>
                     )}
 
-
                     <div className="flex flex-col items-center gap-3">
-                        <label htmlFor="max-time-input" className="text-sm font-semibold">
-                            Max Time
-                        </label>
-                        <input
-                            ref={maxTimeref}
-                            id="max-time-input"
-                            type="number"
-                            value={maxTime}
-                            onChange={(e) => setMaxTime(Number(e.target.value))}
-                            className={`p-2 rounded-md border ${darkMode ? "border-gray-600 bg-gray-700 text-white" : "border-gray-400 bg-white text-black"} 
-                            focus:outline-none focus:ring focus:ring-blue-500 w-32 text-center`}
+                        <label className="text-sm font-semibold">Max Time</label>
+                        <TimeInput
+                        ref={maxTimeref}
+                        value={maxTime}
+                        onChange={setMaxTime}
+                        className={
+                            darkMode
+                            ? "border-gray-600 bg-gray-700 text-white"
+                            : "border-gray-400 bg-white text-black"
+                        }
                         />
                     </div>
+
                     
                 {ohtMode === "random" && (
                         <div className="flex flex-col items-center gap-3">
@@ -1161,6 +1155,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                         } else {
                             resetSimulation();
                             stopSimulation();
+                            resetSimulation();
 
                         }
                     }}

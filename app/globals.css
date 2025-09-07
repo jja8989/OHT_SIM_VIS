@@ -31,3 +31,22 @@ body {
     text-wrap: balance;
   }
 }
+
+.rail { transition: none; }
+
+.node { fill: red; }
+.port { fill: green; }
+.tooltip-panel {
+  background: #fff;
+  color: #000;
+  border: 1px solid #ccc;
+}
+
+.dark .node { fill: #ffffff; }
+.dark .port { fill: #00ff7f; }
+.dark .rail { opacity: 0.85; }
+.dark .tooltip-panel {
+  background: #1E293B;
+  color: #fff;
+  border: 1px solid #475569;
+}

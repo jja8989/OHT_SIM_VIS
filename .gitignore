@@ -37,3 +37,5 @@ test.py
 
 /flask_backend/simul_parallel.py
 /flask_backend/app_session.py
+/flask_backend/datasets_dynamic
+/flask_backend/datasets_pivot

@@ -62,27 +62,16 @@ def create_simulation_table(simulation_id):
 def clear_future_edge_data(sid, simulation_id, simulation_time):
     formatted_time = format_simulation_time(simulation_time) 
 
-    last_saved_time = user_sessions[sid].get('last_saved_time', 0)
-
     conn = get_db_connection()
     cur = conn.cursor()
 
     cur.execute(f"""
-        DELETE FROM simulation_{simulation_id} WHERE time >= %s;
+        DELETE FROM simulation_{simulation_id} WHERE time > %s;
     """, (formatted_time,))
     
     cur.execute(f"""
         SELECT time FROM simulation_{simulation_id} ORDER BY time DESC LIMIT 1;
     """)
-    last_row = cur.fetchone()
-
-
-    if last_row:
-        last_saved_time = parse_simulation_time(last_row[0]) 
-    else:
-        last_saved_time = simulation_time 
-    
-    user_sessions[sid]['last_saved_time'] = last_saved_time
 
     conn.commit()
     cur.close()
@@ -454,9 +443,6 @@ def start_simulation(data):
 
     socketio.start_background_task(run_simulation, sid, current_time, max_time)
 
-        
-    last_saved_time = -10
-    user_sessions[sid]['last_saved_time'] = last_saved_time
     conn = get_db_connection()
     cur = conn.cursor()
     
@@ -495,10 +481,6 @@ def start_only_simulation(data):
     user_sessions[sid]['back_amhs'] = None
     
     socketio.start_background_task(only_simulation, sid, current_time, max_time)
-
-    last_saved_time_back = -10
-    
-    user_sessions[sid]['last_saved_time_back'] = last_saved_time_back
 
     conn = get_db_connection()
     cur = conn.cursor()
@@ -545,7 +527,6 @@ def handle_rail_update(data):
     stop_saving_event = user_sessions[sid].get('stop_saving_event', None)
 
     current_simulation_id = user_sessions[sid]['current_simulation_id']
-    last_saved_time = user_sessions[sid]['last_saved_time']
 
     removed_rail_key = data['removedRailKey']
     oht_positions = data['ohtPositions']
@@ -553,15 +534,21 @@ def handle_rail_update(data):
     current_time = data['currentTime']
     edge_data = data['edges']
     
-    amhs.simulation_running = False
-    amhs.stop_simulation_event.set()
     stop_saving_event.set()
     
-    if amhs.simulation_running:
-        amhs.stop_simulation_event.set()
-        while amhs.simulation_running:
-            socketio.sleep(0.01)
+    amhs.stop_simulation_event.set()
+
             
+    while amhs.simulation_running:
+        socketio.sleep(0.01)
+        
+    try:
+        while not amhs.queue.empty():
+            amhs.queue.get_nowait()
+    except Empty:
+        pass
+    
+
     socketio.emit('simulationStopped', to=sid) 
     
     amhs.current_time = current_time
@@ -591,41 +578,7 @@ def restart_simulation(sid, amhs, current_time):
     except Empty:
         pass
     
-    amhs.start_simulation(socketio, sid, current_time, max_time)    
-    
-    
-@socketio.on('connect')
-def on_connect():
-    sid = request.sid
-    client_id = request.args.get('client_id')
-
-    if not client_id:
-        print(f"[WARN] client_id 없음: sid={sid}")
-        user_sessions[sid] = {}
-        return
-
-    # 이미 같은 client_id로 연결된 세션이 있을 때
-    if client_id in client_id_to_sid:
-        old_sid = client_id_to_sid[client_id]
-
-        # 기존 세션이 있으면 데이터 옮기고 삭제
-        if old_sid in user_sessions:
-            user_sessions[sid] = user_sessions[old_sid]
-            del user_sessions[old_sid]
-            print(f"[INFO] client_id={client_id} 세션 이동: {old_sid} -> {sid}")
-        else:
-            # 예전 sid가 user_sessions에 없으면 새로 생성
-            user_sessions[sid] = {}
-            print(f"[WARN] client_id={client_id} 매핑 꼬임: old_sid={old_sid} 세션 없음")
-
-    else:
-        # 처음 보는 client_id면 새 세션 시작
-        user_sessions[sid] = {}
-        print(f"[INFO] client_id={client_id} 새 세션 시작: sid={sid}")
-
-    # 항상 최신 sid로 업데이트
-    client_id_to_sid[client_id] = sid
-
+    amhs.start_simulation(socketio, sid, current_time, max_time, isAccel = False)    
 
 @socketio.on('disconnect')
 def on_disconnect():

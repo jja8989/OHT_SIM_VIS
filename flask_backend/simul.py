@@ -9,6 +9,8 @@ import math
 import multiprocessing
 import copy
 from queue import Queue
+import math
+
 
 import time
 random.seed(time.time())
@@ -27,7 +29,6 @@ class node():
 
         self.incoming_edges = []
         self.outgoing_edges = []
-        # self.OHT = None
         
 class edge():
     def __init__(self, source, dest, length, max_speed):
@@ -36,6 +37,10 @@ class edge():
         self.dest = dest.id
         self.length = length
         self.unit_vec = (dest.coord - source.coord) / self.length
+        
+        dx, dy = self.unit_vec
+        self.angleDeg = math.degrees(math.atan2(dy, dx)) + 90
+        
         self.max_speed = max_speed
         self.OHTs = []  
         
@@ -521,11 +526,9 @@ class AMHS:
                 oht_origin.speed = 0
                 oht_origin.acc = 0
                 oht_origin.status = 'ON_REMOVED'
-                oht_origin.cal_pos(self.time_step)
+                # oht_origin.cal_pos(self.time_step)
+                oht_origin.cal_pos(0)
                 return
-            
-        # elif oht_origin.from_dist == 0:
-            # self.node_map[oht_origin.from_node].OHT = oht_origin
             
         oht_origin.speed = oht_new['speed']
         oht_origin.status = oht_new['status']
@@ -538,7 +541,8 @@ class AMHS:
             else:
                 oht_origin.status = "IDLE"
                 
-        oht_origin.cal_pos(self.time_step)
+        # oht_origin.cal_pos(self.time_step)
+        oht_origin.cal_pos(0)
              
 
                 
@@ -612,9 +616,6 @@ class AMHS:
             
         for edge in self.edges:
             edge.OHTs.sort(key = lambda oht : -oht.from_dist)
-            
-        # for node in self.nodes:
-        #     node.OHT = None
     
     def generate_job(self):
         for _ in range(500):
@@ -750,7 +751,7 @@ class AMHS:
         return valid_path
     
         
-    def start_simulation(self, socketio, sid, current_time, max_time = 4000, time_step = 0.1):
+    def start_simulation(self, socketio, sid, current_time, max_time = 4000, time_step = 0.1, isAccel = True):
      
         if self.simulation_running:
             print("Simulation is already running. Stopping the current simulation...")
@@ -762,41 +763,43 @@ class AMHS:
         self.simulation_running = True
         self.stop_simulation_event.clear()
         
-        
-        _current_time = 0
-        
         count = 0
         
-        last_saved_time = -10
-
-
-        while _current_time < current_time:
-            if self.stop_simulation_event.is_set():
-                break
+        if (isAccel):
+            _current_time = 0
             
-            if count % 100 == 0:
-                self.generate_job()
+            last_saved_time = -10
             
-            self.assign_jobs()
-            
-            for oht in self.OHTs:
-                oht.move(time_step, _current_time)
 
-            self.update_edge_metrics(_current_time, time_window=60)
-            
-            for oht in self.OHTs:
-                oht.cal_pos(time_step)
-
-            if _current_time - last_saved_time > 10:
-                edge_data = [(last_saved_time+10, edge.id, edge.avg_speed) for edge in self.edges]
-                self.queue.put(edge_data)
-                last_saved_time += 10
+            while _current_time < current_time:
+                if self.stop_simulation_event.is_set():
+                    break
                 
-            self.current_time = _current_time
+                if count % 100 == 0:
+                    self.generate_job()
+                
+                self.assign_jobs()
+                
+                for oht in self.OHTs:
+                    oht.move(time_step, _current_time)
 
-            _current_time += time_step*10
-            count += 1
+                self.update_edge_metrics(_current_time, time_window=60)
+                
+                for oht in self.OHTs:
+                    oht.cal_pos(time_step)
+
+                if _current_time - last_saved_time > 10:
+                    edge_data = [(last_saved_time+10, edge.id, edge.avg_speed) for edge in self.edges]
+                    self.queue.put(edge_data)
+                    last_saved_time += 10
+                    
+                self.current_time = _current_time
+
+                _current_time += time_step*10
+                count += 1
             
+        
+        last_saved_time = ((current_time - 10) // 10) * 10
         
         edge_metrics_cache = {} 
         
@@ -828,6 +831,7 @@ class AMHS:
                 
             if count % 5 == 0:
                 for oht in self.OHTs:
+                        
                     oht_positions.append({
                         'id': oht.id,
                         'x': oht.pos[0],
@@ -840,7 +844,9 @@ class AMHS:
                         'endPort': oht.end_port if oht.end_port else None,
                         'from_node': oht.from_node if oht.from_node else None,
                         'from_dist': oht.from_dist,
-                        'wait_time': oht.wait_time
+                        'wait_time': oht.wait_time,
+                        'angleDeg': self.edge_map[oht.edge].angleDeg if oht.edge else 0
+
                     })
 
                 updated_edges = []
@@ -863,7 +869,6 @@ class AMHS:
 
                 compressed_payload = compress_data(payload)
                 socketio.emit('updateOHT', {'data': compressed_payload}, to=sid)
-
 
             current_time += time_step
             count += 1
