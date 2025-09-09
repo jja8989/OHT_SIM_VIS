@@ -59,13 +59,12 @@ def run_benchmark(num_ohts=200, max_time=2000, time_step=0.1):
     end = time.time()
     return end - start
 
-# -------------------------------
-# 반복 실행 + 평균
-# -------------------------------
+
+print('start')
 num_ohts_list = [100, 200, 300, 400, 500]
 max_time_list = [1000, 2000, 3000, 4000, 5000]
 time_step = 0.1
-repeats = 3  # 각 설정을 5회 반복
+repeats = 3 
 
 results = []
 

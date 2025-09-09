@@ -1,0 +1,30 @@
+# CUDA 12.1 + cuDNN8 (Ubuntu 22.04)
+FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+# Python & 기본 툴
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-pip python3-dev build-essential git ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && ln -s /usr/bin/python3 /usr/bin/python
+
+WORKDIR /workspace
+
+# PyTorch + 일반 패키지 (numpy/pandas 버전 핀으로 바이너리 불일치 예방)
+RUN python -m pip install --upgrade pip \
+ && pip install --index-url https://download.pytorch.org/whl/cu121 \
+      torch torchvision torchaudio \
+ && pip install \
+      numpy==1.26.4 pandas==2.1.4 scikit-learn==1.4.2 \
+      tqdm matplotlib seaborn
+
+# 코드/엔트리포인트
+COPY model.py /workspace/model.py
+COPY entrypoint.sh /workspace/entrypoint.sh
+RUN chmod +x /workspace/entrypoint.sh
+
+# 기본 실행(로그를 파일과 콘솔에 동시에 남김)
+ENTRYPOINT ["/workspace/entrypoint.sh"]

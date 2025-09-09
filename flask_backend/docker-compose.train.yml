@@ -1,0 +1,19 @@
+services:
+  train:
+    image: oht-train:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.train
+    container_name: oht-train
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    volumes:
+      - ../datasets_pivot:/workspace/datasets_pivot:ro
+      - ../datasets_dynamic:/workspace/datasets_dynamic:ro
+      - ./fab_oht_layout_updated.json:/workspace/fab_oht_layout_updated.json:ro
+      - ./checkpoints:/workspace/checkpoints
+      - ./train.log:/workspace/train.log
+    # 필요 시 entrypoint에서 넘기는 인자 대신 여기서 command로 재정의 가능
+    # command: ["bash", "-lc", "python /workspace/model.py --epochs 30 ..."]
+    restart: "no"
