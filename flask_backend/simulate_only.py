@@ -141,7 +141,7 @@ def run_single_experiment(args):
 # 메인 실행
 # -------------------------------
 if __name__ == "__main__":
-    save_dir = "datasets_dynamic"
+    save_dir = "datasets_dynamic2"
     os.makedirs(save_dir, exist_ok=True)
 
     # central edges 한 번만 계산
@@ -150,7 +150,7 @@ if __name__ == "__main__":
     all_edges = edge_list
 
     num_ohts_list = [200, 300, 400, 500]
-    max_time_list = [1000, 2000]
+    max_time_list = [1000, 2000, 3000, 4000, 5000]
     repeats = 10
 
     tasks = []
