@@ -150,6 +150,15 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     const speeds = [0.1, 0.25, 0.33, 0.5, 1, 2, 3, 4]; 
     const [speedIndex, setSpeedIndex] = useState(4); 
 
+    const BASE_STEP_MS = 100; // 한 프레임 기본 duration
+
+    const computeStride = (multiplier: number) =>
+    Math.max(1, Math.floor(multiplier));   // 1x→1, 2.x→2, 3.x→3 ...
+
+    const computeDuration = (multiplier: number) =>
+    multiplier >= 1 ? BASE_STEP_MS         // 배속: 프레임 스킵으로 처리( duration 고정 )
+                    : BASE_STEP_MS / Math.max(1e-3, multiplier); // 감속: duration 증가
+
     const [currentSimulTime, setCurrentSimulTime] = useState(0);
 
 
@@ -175,8 +184,31 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     };
 
 
-    const objectToString = (obj: any) => {
-        return Object.entries(obj).map(([key, value]) => `${key}: ${value}`).join('\n');
+    // const objectToString = (obj: any) => {
+    //     return Object.entries(obj).map(([key, value]) => `${key}: ${value}`).join('\n');
+    // };
+
+    type ObjFmtOpts = {
+    exclude?: string[];                    // 숨길 키들
+    decimals?: number;                     // 기본 소수 자릿수(기본 2)
+    fixedByKey?: Record<string, number>;   // 키별 자릿수 오버라이드
+    };
+
+    const objectToString = (obj: Record<string, any>, opts: ObjFmtOpts = {}) => {
+    const exclude = new Set(opts.exclude ?? []);
+    const decimals = opts.decimals ?? 2;
+    const fixedByKey = { count: 0, ...(opts.fixedByKey ?? {}) }; // count는 정수
+
+    return Object.entries(obj)
+        .filter(([k, v]) => v !== undefined && v !== null && !exclude.has(k))
+        .map(([k, v]) => {
+        if (typeof v === 'number') {
+            const places = fixedByKey[k] ?? decimals;
+            return `${k}: ${v.toFixed(places)}`;
+        }
+        return `${k}: ${v}`;
+        })
+        .join('\n');
     };
 
 
@@ -200,24 +232,30 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
     setIsPlaying(false);
     };
-    
 
     const faster = () => {
-        setSpeedIndex(prev => Math.min(prev + 1, speeds.length - 1))
         d3.selectAll(".oht").interrupt();
-        setSpeedMultiplier(speeds[speedIndex])
-        if (!rafId.current) {
+        setSpeedIndex(prev => {
+            const next = Math.min(prev + 1, speeds.length - 1);
+            setSpeedMultiplier(speeds[next]); // ← next 사용
+            if (!rafId.current) {
             rafId.current = requestAnimationFrame(processTimeStepRef.current);
-        }
-    };
-    const slower = () => {
-        setSpeedIndex(prev => Math.max(prev - 1, 0))
+            }
+            return next;
+        });
+        };
+
+        const slower = () => {
         d3.selectAll(".oht").interrupt();
-        setSpeedMultiplier(speeds[speedIndex])
-        if (!rafId.current) {
+        setSpeedIndex(prev => {
+            const next = Math.max(prev - 1, 0);
+            setSpeedMultiplier(speeds[next]); // ← next 사용
+            if (!rafId.current) {
             rafId.current = requestAnimationFrame(processTimeStepRef.current);
-        }
-    };
+            }
+            return next;
+        });
+        };
 
 
     const trianglePath = useMemo(() => {
@@ -296,7 +334,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                     : (d.max_speed-d.avg_speed) / d.max_speed;
                 return colorScale(Math.max(0, Math.min(1, value)));
             })
-            .on('mouseover', (event, d) => showTooltip(event, objectToString(d)))
+            .on('mouseover', (event, d) => showTooltip(event, objectToString(d, { exclude: ['curve'] })))
             .on('mouseout', hideTooltip)
             .on('click', (event, d) => {
                 event.stopPropagation();
@@ -341,7 +379,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             .attr('cy', d => scalePosition(d).y)
             .attr('r', 1.5)
             .attr('fill', 'green')
-            .on('mouseover', (event, d) => showTooltip(event, objectToString(d)))
+            .on('mouseover', (event, d) => showTooltip(event, objectToString(d, { exclude: ['x', 'y', 'distance'] })))
             .on('mouseout', hideTooltip);
 
         
@@ -358,6 +396,21 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         };
 
         processTimeStepRef.current = () => {
+                const multiplier = speedMultiplierRef.current;
+                const stride = computeStride(multiplier);
+                const durationMs = computeDuration(multiplier);
+
+                  let skip = Math.max(0, stride - 1);
+                    while (
+                        skip > 0 &&
+                        ohtQueueRef.current.length > 1 &&
+                        edgeQueueRef.current.length > 1
+                    ) {
+                        ohtQueueRef.current.shift(); // 버림
+                        edgeQueueRef.current.shift(); // 버림
+                        skip--;
+                    }
+
                 const ohtData = ohtQueueRef.current.shift();
                 const edgeData = edgeQueueRef.current.shift();                    
 
@@ -423,7 +476,8 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                         } 
                         else{
                         oht.transition()
-                            .duration(200 / speedMultiplierRef.current)
+                            // .duration(200 / speedMultiplierRef.current)
+                            .duration(durationMs)                 // ★ 여기만 바뀜
                             .ease(d3.easeLinear)
                             .attr("fill", getColorByStatus(updatedOHT.status))
                             .attr("transform", `translate(${cx},${cy}) rotate(${updatedOHT.angleDeg})`)
@@ -515,7 +569,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
     useEffect(() => {
         if (!isRunning) {
-            setCurrentSimulTime(0); // 실행 멈추면 바로 0 세팅
+            setCurrentSimulTime(0); 
             return;
         }
 
@@ -535,6 +589,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         const sel = d3.select(node);
         if (sel.classed('removed')) {
             node.setAttribute('stroke', 'gray');
+
             return;
         }
 
@@ -574,6 +629,9 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
             const isRemoved = sel.classed("removed");
 
+            if (isRemoved){
+                selectedRail.rail.avg_speed = 0;
+            }
             sel
             .attr('stroke', () => {
                 if (isRemoved) {

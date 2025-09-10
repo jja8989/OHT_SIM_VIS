@@ -96,7 +96,7 @@ app = Flask(__name__)
 CORS(app) 
 socketio = SocketIO(app, cors_allowed_origins="*")  
 
-with open('fab_oht_layout_updated.json') as f:
+with open('fab_oht_layout_cleaned.json') as f:
     layout_data = json.load(f)
 
 @socketio.on('layout')

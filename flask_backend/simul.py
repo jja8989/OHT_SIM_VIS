@@ -10,7 +10,7 @@ import multiprocessing
 import copy
 from queue import Queue
 import math
-
+from collections import deque
 
 import time
 random.seed(time.time())
@@ -29,251 +29,170 @@ class node():
 
         self.incoming_edges = []
         self.outgoing_edges = []
-        
-from collections import deque
-import math
 
-class RollingAvgWithIdle:
-    """entry/exit 기반 롤링 평균속도 + 유휴 구간 가상 통과(1대/τ)"""
-    def __init__(self, window_sec: float, length: float, max_speed: float):
+class EdieWindow:
+    """
+    Edie 정의 기반 윈도우 평균속도 집계기.
+    - 매 스텝(now)마다: 엣지 위 OHT 수 n, 그들의 평균속도 v_avg를 받아
+      dist += v_avg * n * dt, time += n * dt 로 누적 (동시점유 반영)
+    - 버킷(기본 1초) 링버퍼로 슬라이딩 윈도우 유지
+    - sum_time==0이면 '정의 불가'이므로 last_avg를 그대로 유지
+    """
+    def __init__(self, window_sec: float, vmax: float, bin_sec: float = 1.0):
         self.W = float(window_sec)
-        self.L = float(length)
-        self.V = float(max_speed)
-        self.tau = self.L / max(self.V, 1e-12)
+        self.V = float(vmax)
+        self.bin = float(bin_sec)
+        self.inv_bin = 1.0 / self.bin
+        self.N = int(math.ceil(self.W / self.bin)) + 3
 
-        # 덱에 [start, end, dist, dur]
-        self.win = deque()
+        self.bins_dist = [0.0] * self.N
+        self.bins_time = [0.0] * self.N
+        self.bins_id   = [None] * self.N
         self.sum_dist = 0.0
         self.sum_time = 0.0
-        
-        self.wip_win = deque()    # [s, e, dist, dur]
-        self.wip_sum_dist = 0.0
-        self.wip_sum_time = 0.0
-        self.wip_anchor = None    # 마지막 WIP 적산 시각
 
-        self.last_avg = 0.0
-        self.impute_speed = self.V 
+        self.head_id = None
+        self.anchor = None
+        self.last_avg = self.V 
+        self._last_eval_bin = -1
 
-        # 유휴 가상 통과 관리
-        self.last_event_time = -math.inf       # 마지막 실제/가상 통과의 end(=exit) 시각
-        self.last_impute_anchor = -math.inf    # 마지막 가상 통과가 만들어진 시각
+    def _bid(self, t: float) -> int:
+        return int(t * self.inv_bin + 1e-12)
 
-    def _append(self, s: float, e: float, d: float, u: float):
-        self.win.append([s, e, d, u])
-        self.sum_dist += d
-        self.sum_time += u
-        
-    def _wip_append(self, s, e, d, u):
-        self.wip_win.append([s, e, d, u])
-        self.wip_sum_dist += d
-        self.wip_sum_time += u
-        
-    def _wip_prune_left(self, t0: float):
-        while self.wip_win and self.wip_win[0][1] <= t0:
-            _, _, d, u = self.wip_win.popleft()
-            self.wip_sum_dist -= d
-            self.wip_sum_time -= u
-        if self.wip_win:
-            s, e, d, u = self.wip_win[0]
-            if s < t0 < e and u > 1e-12:
-                cut = t0 - s
-                frac = cut / u
-                d_cut = d * frac
-                u_cut = u * frac
-                self.wip_win[0][0] = t0
-                self.wip_win[0][2] -= d_cut
-                self.wip_win[0][3] -= u_cut
-                self.wip_sum_dist -= d_cut
-                self.wip_sum_time -= u_cut
+    def _add_bin(self, b: int, d: float, u: float):
+        i = b % self.N
+        if self.bins_id[i] != b:
+            # 재사용 전에 기존 기여 제거
+            self.sum_dist -= self.bins_dist[i]
+            self.sum_time -= self.bins_time[i]
+            self.bins_dist[i] = 0.0
+            self.bins_time[i] = 0.0
+            self.bins_id[i]   = b
+            if self.head_id is None:
+                self.head_id = b
+        self.bins_dist[i] += d
+        self.bins_time[i] += u
+        self.sum_dist     += d
+        self.sum_time     += u
 
-    def wip_clear(self, now: float | None = None):
-        self.wip_win.clear()
-        self.wip_sum_dist = 0.0
-        self.wip_sum_time = 0.0
-        self.wip_anchor = now  # None 또는 now로 재설정
-        
-    # def wip_accumulate(self, now: float, v_wip: float):
-    #     """연속 적산: 직전 anchor 이후 Δt를 v_wip로 누적."""
-    #     if self.wip_anchor is None:
-    #         self.wip_anchor = now
-    #         return
-    #     dt = now - self.wip_anchor
-    #     if dt <= 0:
-    #         return
-    #     dt = float(dt)
-    #     v = max(0.0, min(float(v_wip), self.V))
-    #     dist = v * dt
-    #     self._wip_append(now - dt, now, dist, dt)
-    #     self.wip_anchor = now
-            
-    def wip_accumulate(self, now: float, v_wip: float):
-        if self.wip_anchor is None:
-            self.wip_anchor = now
+    def _drop_older(self, now: float):
+        if self.head_id is None:
             return
-        dt = now - self.wip_anchor
-        if dt <= 0:
-            return
-        v = max(0.0, min(float(v_wip), self.V))
-        dist = v * dt
+        min_ok = self._bid(now - self.W)
+        h = self.head_id
+        while h < min_ok:
+            i = h % self.N
+            if self.bins_id[i] == h:
+                self.sum_dist -= self.bins_dist[i]
+                self.sum_time -= self.bins_time[i]
+                self.bins_dist[i] = 0.0
+                self.bins_time[i] = 0.0
+                self.bins_id[i]   = None
+            h += 1
+        self.head_id = h
 
-        # ★ 마지막 WIP 세그먼트 연장
-        if self.wip_win and abs(self.wip_win[-1][1] - self.wip_anchor) < 1e-12:
-            self.wip_win[-1][1] += dt
-            self.wip_win[-1][2] += dist
-            self.wip_win[-1][3] += dt
-            self.wip_sum_dist += dist
-            self.wip_sum_time += dt
-        else:
-            self._wip_append(now - dt, now, dist, dt)
-
-        self.wip_anchor = now
-
-
-    def seed_carry_avg(self, now: float, v_carry: float):
-        """직전 윈도우 W를 v_carry로 가득 채운 1개 합산 세그먼트로 시딩"""
-        dur  = self.W
-        dist = max(0.0, float(v_carry)) * dur
-        start = now - dur
-        end   = now
-        # 기존 창 초기화 후 carry로 채움
-        self.win.clear()
-        self.sum_dist = dist
-        self.sum_time = dur
-        self.win.append([start, end, dist, dur])
-        self.last_avg = float(v_carry)
-        # 기준점은 now로 고정 (idle 보간 폭주/점프 방지)
-        self.last_event_time    = end
-        self.last_impute_anchor = end
+    # 외부 API
+    def clear(self, now: float | None = None):
+        self.bins_dist = [0.0] * self.N
+        self.bins_time = [0.0] * self.N
+        self.bins_id   = [None] * self.N
+        self.sum_dist = 0.0
+        self.sum_time = 0.0
+        self.head_id = None
+        self.anchor = now
+        self._last_eval_bin = -1
+        # last_avg는 유지(시각화 안정). 초기화까지 원하면 self.last_avg= self.V/0.0로 조정
         
-        self.wip_clear(now)
-        self.last_event_time    = end
-        self.last_impute_anchor = end
+    def reset(self, anchor: float):
+        # 창을 완전히 비우고, 다음 적산을 anchor 시각부터 시작
+        self.bins_dist = [0.0] * self.N
+        self.bins_time = [0.0] * self.N
+        self.bins_id   = [None] * self.N
+        self.sum_dist = 0.0
+        self.sum_time = 0.0
+        self.head_id  = None
+        self.anchor = anchor
+        self._last_eval_bin = -1
         
-    def _prune_left(self, t0: float):
-        # 완전히 창 밖인 세그먼트 제거
-        while self.win and self.win[0][1] <= t0:
-            _, _, d, u = self.win.popleft()
-            self.sum_dist -= d
-            self.sum_time -= u
-        # 왼쪽 경계가 세그먼트 내부를 자르면 비례 절단
-        if self.win:
-            s, e, d, u = self.win[0]
-            if s < t0 < e and u > 1e-12:
-                cut = t0 - s
-                frac = cut / u
-                d_cut = d * frac
-                u_cut = u * frac
-                self.win[0][0] = t0
-                self.win[0][2] -= d_cut
-                self.win[0][3] -= u_cut
-                self.sum_dist -= d_cut
-                self.sum_time -= u_cut
-
-    def add_completion(self, entry: float, exit: float):
-        dur = max(exit - entry, 1e-12)
-        self._append(entry, exit, self.L, dur)
-        self.last_event_time = exit
-        self.last_impute_anchor = max(self.last_impute_anchor, exit)
-        self.impute_speed = self.V
-        self.wip_clear(exit)
-
-
-
-    def impute_idle_until(self, now: float, is_idle: bool):
-        if not is_idle or self.tau <= 1e-12:
-            return
-        # ★ 추가: 아직 어떤 이벤트도 없으면(둘 다 -inf) 이번 호출을 '기준점 설정'으로만 사용
-        if self.last_impute_anchor == -math.inf and self.last_event_time == -math.inf:
-            self.last_impute_anchor = now
-            return
-
-        anchor = max(self.last_impute_anchor, self.last_event_time)
-        
-        dur = now - anchor
-        if dur <= 0: return
-        dist = self.impute_speed * dur
-        self._append(now - dur, now, dist, dur)
-        self.last_impute_anchor = now
-        self.last_event_time = max(self.last_event_time, now)
-        
-        # gap = now - anchor
-        # n = int(gap // self.tau)
-        # if n <= 0:
-        #     return
-
-        # dur  = n * self.tau
-        # dist = self.impute_speed * dur   # ← Vmax 또는 keep 등 '지정한 보간 속도'
-        # start = now - dur
-        # end   = now
-        
-        # self._append(start, end, dist, dur)
-        # self.last_impute_anchor = end
-        # self.last_event_time = max(self.last_event_time, end)
-        
-    def get_avg_with_wip(self, now: float):
-        t0 = now - self.W
-        self._prune_left(t0)
-        self._wip_prune_left(t0)
-        tot_time = self.sum_time + self.wip_sum_time
-        if tot_time > 1e-12:
-            v = (self.sum_dist + self.wip_sum_dist) / tot_time
-            v = max(0.0, min(v, self.V))
-            self.last_avg = v
-            return v
-        return self.last_avg
-
-    def get_avg(self, now: float):
-        t0 = now - self.W
-        self._prune_left(t0)
-        if self.sum_time > 1e-12:
-            v = self.sum_dist / self.sum_time
-            v = max(0.0, min(v, self.V))
-            self.last_avg = v
-            return v
-        return self.last_avg
-        
-    # def warm_reset(self, now: float):
-    #     """
-    #     modi_rail 등으로 entry/exit 기록을 비운 직후 호출.
-    #     기존 평균을 표시로 유지하고, 가상통과 기준점을 now로 고정.
-    #     """
-    #     # 외부에서 기록/포인터 비웠다면 여기선 avg만 warm-start
-    #     if self._rt is None:
-    #         # _rt는 다음 calculate에서 생성될 테니 화면 표시만 유지
-    #         self.avg_speed = getattr(self, "avg_speed", self.max_speed)
-    #         return
-
-    #     keep = self._rt.last_avg  # 기존 평균 보존
-
-    #     # 롤링 창 초기화
-    #     self._rt.win.clear()
-    #     self._rt.sum_dist = 0.0
-    #     self._rt.sum_time = 0.0
-    #     self._rt.last_avg = keep
-
-    #     # ★ 중요: 첫 idle 보간에서 gap=∞ 방지
-    #     self._rt.last_event_time = -math.inf      # 리셋 이후 실제 통과는 아직 없음
-    #     self._rt.last_impute_anchor = float(now)  # 앵커를 now로
-
-    #     # UI 표시값 동기화(선택)
-    #     self.avg_speed = keep
         
     def seed_freeflow(self, now: float):
-        """초기 안정화를 위해 윈도우를 free-flow(V)로 채운 '합산 세그먼트' 1개 주입."""
-        if self.tau <= 1e-12:
-            return  # V가 0에 가까우면 시딩 무의미
-        n = max(1, int(math.ceil(self.W / self.tau)))  # 윈도우를 덮도록 필요한 '대수'
-        start = now - n * self.tau
-        end   = now
-        dist  = n * self.L
-        dur   = n * self.tau
-        self._append(start, end, dist, dur)
-        # 앵커 고정: 이후 idle 보간이 폭주하지 않도록 기준을 now로 맞춘다
-        self.last_event_time   = end
-        self.last_impute_anchor = end
-        self.last_avg = self.V  # 초기 표시값도 안정적으로 V
+        """[now - W, now) 구간을 '가상 1대가 V로 통과'했다고 채우기"""
+        # self.reset(now - self.W)
+        # # anchor = now - W 상태에서 now까지 누적 → 창이 V로 가득
+        # self.accumulate(now, self.V, 1)
+        # self.last_avg = self.V
+        self.seed_with(now, self.V, n=1.0, fill=1.0)
+        
+    def seed_with(self, now: float, v: float, n: float = 1.0, fill: float = 1.0):
+        """
+        [now - fill*W, now) 구간을 'n대가 속도 v로 통과'했다고 가정해 한 번에 채움.
+        - fill: 0~1 (1이면 창 전체, 0.3이면 창의 30%만)
+        """
+        fill = max(0.0, min(1.0, float(fill)))
+        v = max(0.0, min(self.V, float(v)))
+        if fill <= 0.0 or n <= 0.0:
+            self.reset(now)          # 그냥 비우고 앵커만 now
+            return
+        self.reset(now - fill * self.W)
+        self.accumulate(now, v, n)   # 여기서 last_avg도 갱신되도록
+        self.last_avg = v            # 즉시 표시 안정
 
 
+    def accumulate(self, now: float, v_avg: float, n_veh: int):
+        """
+        anchor~now 구간을 v_avg, n_veh 로 적산하여 윈도우에 반영.
+        n_veh==0이면 '엣지 점유가 없었음' → 누적 없음(Edie 정의 그대로).
+        """
+        if self.anchor is None:
+            self.anchor = now
+            return
+        t1 = self.anchor; t2 = float(now)
+        if t2 <= t1:
+            return
+
+        if n_veh <= 0:
+            # 점유 없으면 누적 없이 기준만 이동
+            self.anchor = now
+            return
+
+        v = float(v_avg)
+        if v < 0.0: v = 0.0
+        elif v > self.V: v = self.V
+
+        # 동시점유 반영: dist = v * n * dt, time = n * dt
+        b1 = self._bid(t1)
+        b2 = self._bid(t2 - 1e-12)
+        bw = self.bin
+
+        if b1 == b2:
+            dt = t2 - t1
+            self._add_bin(b1, v * n_veh * dt, n_veh * dt)
+        else:
+            dt1 = (b1 + 1) * bw - t1
+            if dt1 > 0.0: self._add_bin(b1, v * n_veh * dt1, n_veh * dt1)
+            for b in range(b1 + 1, b2):
+                self._add_bin(b, v * n_veh * bw, n_veh * bw)
+            dt2 = t2 - (b2 * bw)
+            if dt2 > 0.0: self._add_bin(b2, v * n_veh * dt2, n_veh * dt2)
+
+        self.anchor = now
+
+    def get_avg(self, now: float, per_second_gate: bool = True):
+        if per_second_gate:
+            cur_bin = int(now)
+            if cur_bin == self._last_eval_bin:
+                return self.last_avg
+
+        self._drop_older(now)
+        if self.sum_time > 1e-12:
+            v = self.sum_dist / self.sum_time
+            if v < 0.0: v = 0.0
+            elif v > self.V: v = self.V
+            self.last_avg = v
+
+        if per_second_gate:
+            self._last_eval_bin = int(now)
+        return self.last_avg
         
 class edge():
     def __init__(self, source, dest, length, max_speed):
@@ -291,335 +210,55 @@ class edge():
         
         self.count = 0  
         self.avg_speed = max_speed
-        self.entry_exit_records = {} 
         
-        
-        self._last_synced_idx = {}    # {oht_id: 마지막으로 소비한 index}
         self._rt = None
         self.avg_speed = self.max_speed
-        
-        self._pending_warm_reset = False
-        self._pending_keep_avg = None
 
         self.is_removed = False
-        
-    def _ensure_rt(self, window_sec: float):
+    
+    def _ensure_rt(self, window_sec: float, bin_sec: float = 1.0):
         if (self._rt is None or
             abs(self._rt.W - window_sec) > 1e-9 or
-            abs(self._rt.L - self.length) > 1e-9 or
             abs(self._rt.V - self.max_speed) > 1e-9):
-            self._rt = RollingAvgWithIdle(window_sec, self.length, self.max_speed)
+            self._rt = EdieWindow(window_sec, self.max_speed, bin_sec=bin_sec)
             
-    def _sync_from_records(self, now: float):
-        """
-        지난 호출 이후 '새로 완결된' (entry, exit)만 집계기에 반영.
-        """
-        for oht_id, recs in self.entry_exit_records.items():
-            last_i = self._last_synced_idx.get(oht_id, -1)
-            # 기록이 시간순 append라고 가정 (아니면 정렬 필요)
-            i = last_i + 1
-            n = len(recs)
-            while i < n:
-                entry, exit = recs[i]
-                if exit is None or exit > now:
-                    # 아직 빠져나가지 않았거나 미래면 스킵
-                    break
-                # 완료 통과만 반영
-                self._rt.add_completion(entry, exit)
-                i += 1
-            # i-1까지 소비했으면 인덱스 업데이트
-            self._last_synced_idx[oht_id] = max(self._last_synced_idx.get(oht_id, -1), i - 1)
-            
-    def request_warm_reset(self, keep_avg=None):
-        """
-        다음 calculate_avg_speed 호출 시점에 warm reset을 적용하도록 표시만 해둔다.
-        keep_avg가 주어지면 그 값을 초기 평균으로 사용(없으면 self.avg_speed).
-        """
-        self._pending_warm_reset = True
-        self._pending_keep_avg = keep_avg
-            
-    # def _wip_extra(self, current_time: float, time_window: float):
-    #     """exit 없이 edge 위에 올라와 있는 OHT들의 '임시' 거리/시간 기여를 계산(덱에는 저장 X)."""
-    #     t0 = current_time - time_window
-
-    #     # 1) 속도 추정: 현재 엣지 속도들의 중앙값(막혔으면 0), 상한은 max_speed
-    #     speeds = [getattr(oht, "speed", 0.0) for oht in self.OHTs]
-    #     if speeds:
-    #         speeds.sort()
-    #         mid = len(speeds)//2
-    #         v_est = (speeds[mid] if len(speeds) % 2 == 1 else 0.5*(speeds[mid-1]+speeds[mid]))
-    #         v_est = max(0.0, min(float(v_est), float(self.max_speed)))
-    #         # 완전 막힘(거의 0) 노이즈 컷
-    #         if max(speeds) < 1e-6:
-    #             v_est = 0.0
-    #     else:
-    #         v_est = 0.0
-
-    #     dist_extra = 0.0
-    #     time_extra = 0.0
-
-    #     # 2) 열린 레코드들만( exit=None ) 윈도우 겹친 시간만큼 임시 누적
-    #     for oht_id, recs in self.entry_exit_records.items():
-    #         if not recs:
-    #             continue
-    #         entry, exit = recs[-1]
-    #         if exit is not None:
-    #             continue  # 완료된 건 WIP 아님
-    #         start = max(entry, t0)
-    #         overlap = current_time - start
-    #         if overlap > 0:
-    #             time_extra += overlap
-    #             dist_extra += v_est * overlap
-
-    #     return dist_extra, time_extra
-
-
 
     def calculate_avg_speed(self, time_window: float, current_time: float):
-        self._ensure_rt(time_window)
+        self._ensure_rt(time_window, bin_sec=1.0)
+        rt = self._rt
+
+        # 제거된 엣지는 0으로
         if self.is_removed:
-            if self._rt is not None:
-                self._rt.win.clear()
-                self._rt.sum_dist = 0.0
-                self._rt.sum_time = 0.0
-                self._rt.wip_clear(current_time)
-                self._rt.last_avg = 0.0
-                self._rt.last_event_time = current_time
-                self._rt.last_impute_anchor = current_time
+            rt.clear(current_time)
             self.avg_speed = 0.0
             return 0.0
         
-        if self._pending_warm_reset:
-            keep = self._pending_keep_avg if (self._pending_keep_avg is not None) else self.avg_speed
-            # 직전 윈도우를 keep으로 채워 넣고 시작
-            self._rt.seed_carry_avg(current_time, keep)
-            # 이후 idle 보간은 free-flow로 → 점진적 변화
-            self._rt.impute_speed = self._rt.V
+        if (current_time <= 0.15):
+            rt.seed_freeflow(current_time)
 
-            self._pending_warm_reset = False
-            self._pending_keep_avg = None
+        # 현재 엣지 위 OHT 평균속도/대수
+        n = len(self.OHTs)
+        if n > 0:
+            maxV = float(self.max_speed)
+            ssum = 0.0
+            for o in self.OHTs:
+                s = getattr(o, "speed", 0.0)
+                if s < 0.0: s = 0.0
+                elif s > maxV: s = maxV
+                ssum += s
+            v_avg = ssum / n
 
-            
-        if current_time <= 1e-9 and len(self._rt.win) == 0:
-            self._rt.seed_freeflow(current_time)
-    
-        # 1) 누락분만 동기화(새로 완료된 exit만 반영)
-        self._sync_from_records(current_time)
-        # 2) 유휴 가상 통과(정체 무시는 is_idle만으로 판단)
-        # is_idle = (len(self.OHTs) == 0)
-        # self._rt.impute_idle_until(current_time, is_idle=is_idle)
-        
-        # dist_extra, time_extra = self._wip_extra(current_time, time_window)
-        # if self._rt.sum_time + time_extra > 1e-12:
-        #     v = (self._rt.sum_dist + dist_extra) / (self._rt.sum_time + time_extra)
-        # else:
-        #     v = self.avg_speed  # 분모 0이면 직전값 유지
-        if len(self.OHTs) > 0:
-        # WIP 추정속도: 평균(클립) + EMA
-            speeds = [max(0.0, min(float(getattr(oht, "speed", 0.0)), float(self.max_speed))) for oht in self.OHTs]
-            if speeds:
-                v_est = sum(speeds) / len(speeds)
-            else:
-                v_est = 0.0
-            # 짧은 EMA로 과도한 출렁임 완화(선택)
-            if not hasattr(self, "_wip_v_ema"):
-                self._wip_v_ema = v_est
-            else:
-                lam = 0.7     # 0.6~0.85 권장
-                self._wip_v_ema = lam*self._wip_v_ema + (1-lam)*v_est
-            self._rt.wip_accumulate(current_time, self._wip_v_ema)
-            # idle 보간은 하지 않음
+            # 실제 점유 누적
+            rt.accumulate(current_time, v_avg, n)
+
         else:
-            # OHT 없음 → WIP 리셋 + idle 보간으로 free-flow
-            self._rt.wip_clear(current_time)
-            self._rt.impute_idle_until(current_time, is_idle=True)
+            rt.accumulate(current_time, self.max_speed, 1)
 
-        # 3) 최종 평균 (윈도우 prune 포함)
-        v = self._rt.get_avg_with_wip(current_time)
-        # 3) 평균 조회(윈도우 Prune 포함)
-        # v = self._rt.get_avg(current_time)
+        # 평균 계산
+        v = rt.get_avg(current_time, per_second_gate=False)
+
         self.avg_speed = v
         return v
-                    
-    # def prune_old_records(self, current_time, time_window):
-    #     t0 = max(0, current_time - time_window)
-
-    #     for oht_id, records in list(self.entry_exit_records.items()):
-    #         pruned = []
-    #         for entry, exit in records:
-    #             if exit is None:
-    #                 pruned.append((entry, exit))
-    #                 continue
-    #             start = max(entry, t0)
-    #             end = min(exit, current_time)
-    #             if end - start > 0:
-    #                 pruned.append((entry, exit))
-
-    #         if pruned:
-    #             self.entry_exit_records[oht_id] = pruned
-    #         else:
-    #             del self.entry_exit_records[oht_id]
-
-    # def calculate_avg_speed(self, time_window, current_time):
-
-    #     self.prune_old_records(current_time, time_window)
-
-    #     t0 = max(0, current_time - time_window)
-    #     total_time = 0.0
-    #     total_dist = 0.0
-
-    #     for _, records in self.entry_exit_records.items():
-    #         for entry, exit in records:
-    #             ex = current_time if exit is None else exit
-    #             start = max(entry, t0)
-    #             end = min(ex, current_time)
-    #             overlap = end - start
-    #             if overlap <= 0:
-    #                 continue
-    #             dur = ex - entry
-    #             if dur > 1e-6:
-    #                 total_time += overlap
-    #                 total_dist += self.length * (overlap / dur)
-
-    #     if total_time > 0:
-    #         observed_avg = total_dist / total_time
-    #     else:
-    #         observed_avg = getattr(self, "avg_speed", self.max_speed)
-
-    #     utilization = min(1.0, total_time / max(1e-6, float(time_window)))
-    #     blended = utilization * observed_avg + (1.0 - utilization) * self.max_speed
-
-    #     prev = getattr(self, "avg_speed", blended)
-    #     alpha = 0.2 
-    #     smoothed = alpha * blended + (1 - alpha) * prev
-
-    #     smoothed = max(0.0, min(smoothed, self.max_speed))
-
-    #     self.avg_speed = smoothed
-    #     return self.avg_speed
-        
-    # def calculate_avg_speed(self, time_window, current_time):
-    #     self.prune_old_records(current_time, time_window)
-
-    #     t0 = max(0, current_time - time_window)
-    #     total_time = 0.0
-    #     total_dist = 0.0
-
-    #     # 1) throughput(완료 통과)로만 속도 산출
-    #     for _, records in self.entry_exit_records.items():
-    #         for entry, exit in records:
-    #             if exit is None:
-    #                 continue
-    #             ex = exit
-    #             start = max(entry, t0)
-    #             end = min(ex, current_time)
-    #             overlap = end - start
-    #             if overlap <= 0:
-    #                 continue
-    #             dur = ex - entry
-    #             if dur > 1e-6:
-    #                 total_time += overlap
-    #                 total_dist += self.length * (overlap / dur)
-
-    #     # 2) 타깃 속도 결정
-    #     if total_time > 0:
-    #         target = total_dist / total_time               # 정상: 실제 평균속도
-    #     else:
-    #         # 통과 기록이 전혀 없을 때: OHT가 있으면 정체(0), 없으면 유휴(max)
-    #         has_stuck_oht = (len(self.OHTs) > 0)
-    #         target = 0.0 if has_stuck_oht else self.max_speed
-
-    #     # 3) 스무딩만 적용 (max와 혼합 금지)
-    #     prev = getattr(self, "avg_speed", target)
-    #     alpha = 0.2
-    #     smoothed = alpha * target + (1 - alpha) * prev
-    #     smoothed = max(0.0, min(smoothed, self.max_speed))
-
-    #     self.avg_speed = smoothed
-    #     return self.avg_speed
-
-    # def calculate_avg_speed(self, time_window, current_time):
-    #     # 컷이면 바로 0 (표시/제어 목적상)
-    #     if self.is_removed:
-    #         self.avg_speed = 0.0
-    #         # 상태 초기화(선택)
-    #         self.idle_since = None
-    #         self.cong_since = None
-    #         self.last_components.update({"flow_time":0,"idle_time":0,"cong_time":time_window,"flow_avg":0})
-    #         return 0.0
-
-    #     self.prune_old_records(current_time, time_window)
-    #     t0 = max(0, current_time - time_window)
-
-    #     # 1) 실제 통과(throughput)
-    #     total_time, total_dist = 0.0, 0.0
-    #     for _, recs in self.entry_exit_records.items():
-    #         for entry, exit in recs:
-    #             if exit is None: 
-    #                 continue
-    #             start = max(entry, t0); end = min(exit, current_time)
-    #             overlap = end - start
-    #             if overlap <= 0: 
-    #                 continue
-    #             dur = exit - entry
-    #             if dur > 1e-6:
-    #                 total_time += overlap
-    #                 total_dist += self.length * (overlap / dur)
-
-    #     flow_time = total_time
-    #     flow_avg  = (total_dist / total_time) if total_time > 0 else self.max_speed
-
-    #     idle_time = 0.0
-    #     if len(self.OHTs) == 0:
-    #         if self.idle_since is None:
-    #             self.idle_since = current_time
-    #         idle_overlap = max(0.0, current_time - max(t0, self.idle_since))
-    #         idle_time = idle_overlap
-    #         total_time += idle_overlap
-    #         total_dist += self.max_speed * idle_overlap
-    #         self.cong_since = None
-    #     else:
-    #         self.idle_since = None
-    #         if flow_time == 0.0:
-    #             if self.cong_since is None:
-    #                 self.cong_since = current_time
-    #             cong_overlap = max(0.0, current_time - max(t0, self.cong_since))
-    #             speeds = [oht.speed for oht in self.OHTs]
-    #             if speeds:
-    #                 v_fill = min(max(0.0, float(np.median(speeds))), self.v_cap_cong)
-    #                 if max(speeds) < self.v_block_eps:
-    #                     v_fill = 0.0
-    #             else:
-    #                 v_fill = 0.0
-    #             total_time += cong_overlap
-    #             total_dist += v_fill * cong_overlap
-    #             cong_time = cong_overlap
-    #         else:
-    #             self.cong_since = None
-    #             cong_time = 0.0
-
-    #     # 4) 최종 시간가중 평균
-    #     if total_time > 0:
-    #         v = total_dist / total_time
-    #     else:
-    #         v = self.max_speed if len(self.OHTs) == 0 else 0.0
-
-    #     eps = max(1e-3, 1e-4 * self.max_speed)
-    #     if v < eps: v = 0.0
-    #     elif self.max_speed - v < eps: v = self.max_speed
-
-    #     self.avg_speed = max(0.0, min(v, self.max_speed))
-    #     # (선택) 진단용 구성요소 저장
-    #     self.last_components.update({
-    #         "flow_time": round(flow_time, 3),
-    #         "idle_time": round(idle_time, 3),
-    #         "cong_time": round(total_time - flow_time - idle_time, 3),
-    #         "flow_avg": round(flow_avg, 3)
-    #     })
-    #     return self.avg_speed
-
-
-
     
 class port():
     def __init__(self, name, from_node, to_node, from_dist):
@@ -675,6 +314,9 @@ class OHT():
         edge = self.edge_map[self.edge] if self.edge is not None else None
         
         self.pos = from_node.coord + edge.unit_vec * self.from_dist if self.edge is not None else from_node.coord
+        
+        if edge is not None:
+            self.speed = min(max(self.speed + self.acc * time_step, 0), edge.max_speed)
 
         
     def move(self, time_step, current_time):
@@ -724,11 +366,6 @@ class OHT():
                 try:
 
                     if len(self.path) > 0:
-                
-                        exit_record = edge.entry_exit_records.get(self.id, [])
-                        if exit_record and exit_record[-1][1] is None:
-                            exit_record[-1] = (exit_record[-1][0], current_time)
-                        edge.entry_exit_records[self.id] = exit_record
                                             
                         edge.OHTs.remove(self)
                         
@@ -739,12 +376,6 @@ class OHT():
                         if self not in edge.OHTs:
                             edge.OHTs.append(self)
                             edge.count += 1
-                            # if self.id not in edge.entry_exit_records:
-                            #     edge.entry_exit_records[self.id] = []
-                            #     edge.entry_exit_records[self.id].append((current_time, None))
-                            recs = edge.entry_exit_records.setdefault(self.id, [])
-                            if (not recs) or (recs[-1][1] is not None):
-                                recs.append((current_time, None))
                             
                     else:
                         self.speed = 0
@@ -765,7 +396,7 @@ class OHT():
             self.arrive()
             return
 
-        self.speed = min(max(self.speed + self.acc * time_step, 0), edge.max_speed)
+        # self.speed = min(max(self.speed + self.acc * time_step, 0), edge.max_speed)
         
     def is_arrived(self):
         
@@ -843,14 +474,6 @@ class OHT():
                     self.acc = emergency_coeff * (-self.speed / time_step) + (1-emergency_coeff) * (-3500)
                     return
                 
-        # if self.node_map[edge.dest].OHT is not None:
-        #     dist_diff = edge.length - self.from_dist
-            
-        #     if 0 < dist_diff < self.rect:
-        #         emergency_coeff = 1.0 * (dist_diff < emergency_threshold)
-        #         self.acc = emergency_coeff * (-self.speed / time_step) + (1-emergency_coeff) * (-3500)
-
-        #         return
               
         if len(self.path) > 0:
             next_edge = self.edge_map[self.path[0]]
@@ -918,7 +541,6 @@ class AMHS:
             edge.OHTs = []
             edge.count = 0
             edge.avg_speed = edge.max_speed
-            edge.entry_exit_records = {} 
 
         
         self.ports = copy.deepcopy(ports)
@@ -1058,7 +680,6 @@ class AMHS:
             else:
                 oht_origin.status = "IDLE"
                 
-        # oht_origin.cal_pos(self.time_step)
         oht_origin.cal_pos(0)
              
 
@@ -1095,32 +716,59 @@ class AMHS:
             oht_origin.path = []
 
     def modi_edge(self, source, dest, oht_positions, is_removed):
+        edge_key = self.get_edge(source, dest)
+        e = self.edge_map[edge_key]
+
         if is_removed:
-            removed_edge = self.get_edge(source, dest)
-            self.edge_map[removed_edge].is_removed = True
-            try:       
+            e.is_removed = True
+            try:
                 self.graph.removeEdge(self.node_id_map[source], self.node_id_map[dest])
                 self.apsp = nk.distance.APSP(self.graph)
                 self.apsp.run()
             except:
                 print(source, dest)
+
+
+            if e._rt is not None:
+                e._rt.reset(self.current_time)
+            e.avg_speed = 0.0 
+            
+            # removed_edge = self.get_edge(source, dest)
+            # self.edge_map[removed_edge].is_removed = True
+            # try:       
+            #     self.graph.removeEdge(self.node_id_map[source], self.node_id_map[dest])
+            #     self.apsp = nk.distance.APSP(self.graph)
+            #     self.apsp.run()
+            # except:
+            #     print(source, dest)
         else:
-            edge_to_restore = self.get_edge(source, dest)
-            self.edge_map[edge_to_restore].is_removed = False
-            if edge_to_restore:
-                self.graph.addEdge(self.node_id_map[source], self.node_id_map[dest], self.edge_map[edge_to_restore].length)
-                self.apsp = nk.distance.APSP(self.graph)
-                self.apsp.run()
+            e.is_removed = False
+            if edge_key:
+                self.graph.addEdge(self.node_id_map[source], self.node_id_map[dest], e.length)
+                self.apsp = nk.distance.APSP(self.graph); self.apsp.run()
             else:
                 print(f"Rail {source} -> {dest} not found in original edges.")
+
+            if e._rt is not None:
+                e._rt.reset(self.current_time)
+                
+            # edge_to_restore = self.get_edge(source, dest)
+            # self.edge_map[edge_to_restore].is_removed = False
+            # if edge_to_restore:
+            #     self.graph.addEdge(self.node_id_map[source], self.node_id_map[dest], self.edge_map[edge_to_restore].length)
+            #     self.apsp = nk.distance.APSP(self.graph)
+            #     self.apsp.run()
+            # else:
+            #     print(f"Rail {source} -> {dest} not found in original edges.")
         
     
     def reinitialize_simul(self, oht_positions, edge_data):
         for edge in self.edges:
             edge.OHTs.clear()
-            edge.entry_exit_records.clear()
-            edge._last_synced_idx.clear()   # ← 이것도 같이 초기화 권장
-
+            if edge._rt is None:
+                edge._ensure_rt(60)
+            else:
+                edge._rt.reset(self.current_time) 
         
         for oht in oht_positions:
             oht_in_amhs = self.get_oht(oht['id'])
@@ -1137,7 +785,9 @@ class AMHS:
             
         for edge in self.edges:
             edge.OHTs.sort(key = lambda oht : -oht.from_dist)
-            edge.request_warm_reset(keep_avg=edge.avg_speed)
+            carry_v = edge.avg_speed if edge.avg_speed > 0 else edge.max_speed
+            edge._rt.seed_with(self.current_time, carry_v, n=1.0, fill=0.35)
+            edge.avg_speed = carry_v
     
     def generate_job(self):
         for _ in range(500):
@@ -1197,9 +847,6 @@ class AMHS:
                 # self.node_map[oht.from_node].OHT = None
                 if oht not in self.edge_map[oht.edge].OHTs:
                     self.edge_map[oht.edge].OHTs.append(oht)
-                    recs = self.edge_map[oht.edge].entry_exit_records.setdefault(oht.id, [])
-                    if (not recs) or (recs[-1][1] is not None):
-                        recs.append((self.current_time, None))
                             
     def update_edge_metrics(self, current_time, time_window):
         for edge in self.edges:
@@ -1220,12 +867,11 @@ class AMHS:
         dist = self.apsp.getDistance(source_idx, dest_idx)
         
         if dist >= 1e100:
-            return dist
-        else:
             source_idx = self.node_id_map[source_id]
             dest_idx = self.node_id_map[dest_id]            
-
-            dist = self.original_apsp.getDistance(source_idx, dest_idx)                
+            dist = self.original_apsp.getDistance(source_idx, dest_idx)     
+            return dist
+        else:
             return dist
         
 
@@ -1306,12 +952,12 @@ class AMHS:
                 self.assign_jobs()
                 
                 for oht in self.OHTs:
-                    oht.move(time_step, _current_time)
+                    oht.move(time_step*10, _current_time)
 
                 self.update_edge_metrics(_current_time, time_window=60)
                 
                 for oht in self.OHTs:
-                    oht.cal_pos(time_step)
+                    oht.cal_pos(time_step*10)
 
                 if _current_time - last_saved_time > 10:
                     edge_data = [(last_saved_time+10, edge.id, edge.avg_speed) for edge in self.edges]
@@ -1376,15 +1022,22 @@ class AMHS:
 
                 updated_edges = []
                 for edge in self.edges:
-                    key = f"{edge.source}-{edge.dest}"
-                    new_metrics = {"count": edge.count, "avg_speed": edge.avg_speed}
-                    if edge_metrics_cache.get(key) != new_metrics:
-                        edge_metrics_cache[key] = new_metrics
-                        updated_edges.append({
-                            "from": edge.source,
-                            "to": edge.dest,
-                            **new_metrics
-                        })
+                    # key = f"{edge.source}-{edge.dest}"
+                    # new_metrics = {"count": edge.count, "avg_speed": edge.avg_speed}
+                    # if edge_metrics_cache.get(key) != new_metrics:
+                    #     edge_metrics_cache[key] = new_metrics
+                    #     updated_edges.append({
+                    #         "from": edge.source,
+                    #         "to": edge.dest,
+                    #         **new_metrics
+                    #     })
+
+                    updated_edges.append({
+                        "from": edge.source,
+                        "to": edge.dest,
+                        "count": edge.count,
+                        "avg_speed": edge.avg_speed,
+                    })
 
                 payload = {
                     'time': current_time,
@@ -1429,12 +1082,12 @@ class AMHS:
             self.assign_jobs()
             
             for oht in self.OHTs:
-                oht.move(time_step, _current_time)
+                oht.move(time_step*10, _current_time)
 
             self.update_edge_metrics(_current_time, time_window=60)
             
             for oht in self.OHTs:
-                oht.cal_pos(time_step)
+                oht.cal_pos(time_step*10)
 
             if _current_time - last_saved_time > 10:
                 edge_data = [(last_saved_time+10, edge.id, edge.avg_speed) for edge in self.edges]
@@ -1481,5 +1134,7 @@ class AMHS:
         
         socketio.emit("backSimulationFinished", to=sid)
 
+        
+        
         
         
