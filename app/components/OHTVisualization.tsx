@@ -6,8 +6,7 @@ import { SunIcon, MoonIcon } from "@heroicons/react/24/outline";
 import Modal from "./Modal"; 
 import { getClientId } from '../utils/getClientId';
 import SimulationControls from "./SimulationControls";
-import TimeInput from "./TimeInput"; // 불러오기
-
+import TimeInput from "./TimeInput"; 
 
 const client_id = getClientId();
 
@@ -60,13 +59,6 @@ interface LayoutData {
 interface OHTVisualizationProps {
     data: LayoutData;
 }
-
-const colorScale = d3.scaleLinear<string, string>()
-    .domain([0, 1])
-    .range([
-        '#0000ff',
-        '#ff0000'
-    ]);
 
 const decompressData = (compressedData: string) => {
     try {
@@ -140,6 +132,8 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     const [showModal, setShowModal] = useState(false);
 
     const [isPlaying, setIsPlaying] = useState(false);
+    const isPlayingRef = useRef(isPlaying);
+
     const [speedMultiplier, setSpeedMultiplier] = useState(1);
     const speedMultiplierRef = useRef(speedMultiplier);
 
@@ -150,18 +144,37 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     const speeds = [0.1, 0.25, 0.33, 0.5, 1, 2, 3, 4]; 
     const [speedIndex, setSpeedIndex] = useState(4); 
 
-    const BASE_STEP_MS = 100; // 한 프레임 기본 duration
+    const BASE_STEP_MS = 100; 
 
     const computeStride = (multiplier: number) =>
-    Math.max(1, Math.floor(multiplier));   // 1x→1, 2.x→2, 3.x→3 ...
+    Math.max(1, Math.floor(multiplier)); 
 
     const computeDuration = (multiplier: number) =>
-    multiplier >= 1 ? BASE_STEP_MS         // 배속: 프레임 스킵으로 처리( duration 고정 )
-                    : BASE_STEP_MS / Math.max(1e-3, multiplier); // 감속: duration 증가
+    multiplier >= 1 ? BASE_STEP_MS     
+                    : BASE_STEP_MS / Math.max(1e-3, multiplier);
 
     const [currentSimulTime, setCurrentSimulTime] = useState(0);
 
+    const headerRef = useRef<HTMLElement | null>(null);
+    const footerRef = useRef<HTMLElement | null>(null);
 
+
+    const colorScale = useMemo(() => {
+    return d3.scaleLinear<string, string>()
+        .domain([0, 1])
+        .range(
+        darkMode
+            ? ["#3399ff", "#ff6666"]
+            : ["#0000ff", "#ff0000"]
+        );
+    }, [darkMode]);
+
+
+    const colorScaleRef = useRef(colorScale);
+
+    useEffect(() => {
+    colorScaleRef.current = colorScale;
+    }, [colorScale]);
 
 
     function formatTime(secs: number) {
@@ -183,21 +196,16 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         }
     };
 
-
-    // const objectToString = (obj: any) => {
-    //     return Object.entries(obj).map(([key, value]) => `${key}: ${value}`).join('\n');
-    // };
-
     type ObjFmtOpts = {
-    exclude?: string[];                    // 숨길 키들
-    decimals?: number;                     // 기본 소수 자릿수(기본 2)
-    fixedByKey?: Record<string, number>;   // 키별 자릿수 오버라이드
+    exclude?: string[];                    
+    decimals?: number;                    
+    fixedByKey?: Record<string, number>;  
     };
 
     const objectToString = (obj: Record<string, any>, opts: ObjFmtOpts = {}) => {
     const exclude = new Set(opts.exclude ?? []);
     const decimals = opts.decimals ?? 2;
-    const fixedByKey = { count: 0, ...(opts.fixedByKey ?? {}) }; // count는 정수
+    const fixedByKey = { count: 0, ...(opts.fixedByKey ?? {}) };
 
     return Object.entries(obj)
         .filter(([k, v]) => v !== undefined && v !== null && !exclude.has(k))
@@ -213,7 +221,6 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
 
     const play = () => {
-    
     d3.selectAll(".oht").interrupt();
 
     if (!rafId.current) {
@@ -234,11 +241,13 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     };
 
     const faster = () => {
+    
         d3.selectAll(".oht").interrupt();
         setSpeedIndex(prev => {
             const next = Math.min(prev + 1, speeds.length - 1);
-            setSpeedMultiplier(speeds[next]); // ← next 사용
-            if (!rafId.current) {
+            setSpeedMultiplier(speeds[next]);
+
+            if (isPlaying) {
             rafId.current = requestAnimationFrame(processTimeStepRef.current);
             }
             return next;
@@ -246,11 +255,16 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         };
 
         const slower = () => {
+        if (rafId.current) {
+            cancelAnimationFrame(rafId.current);
+            rafId.current = null;
+        }
         d3.selectAll(".oht").interrupt();
         setSpeedIndex(prev => {
             const next = Math.max(prev - 1, 0);
-            setSpeedMultiplier(speeds[next]); // ← next 사용
-            if (!rafId.current) {
+            setSpeedMultiplier(speeds[next]);
+
+            if (isPlaying) {
             rafId.current = requestAnimationFrame(processTimeStepRef.current);
             }
             return next;
@@ -260,7 +274,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
     const trianglePath = useMemo(() => {
         const base = 10;
-        const height = 14; // 좀 더 뾰족하게
+        const height = 14;
         return `M 0 -${height/2} L ${base/2} ${height/2} L -${base/2} ${height/2} Z`;
         }, []);
 
@@ -364,11 +378,9 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             .attr('cx', d => scalePosition(d).x)
             .attr('cy', d => scalePosition(d).y)
             .attr('r', 2)
-            .attr('fill', 'red')
+            .attr('fill', 'var(--node-color)')
             .on('mouseover', (event, d) => showTooltip(event, objectToString(d)))
             .on('mouseout', hideTooltip);
-
-
 
         g.selectAll('.port')
             .data(ports)
@@ -378,7 +390,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             .attr('cx', d => scalePosition(d).x)
             .attr('cy', d => scalePosition(d).y)
             .attr('r', 1.5)
-            .attr('fill', 'green')
+            .attr('fill', 'var(--port-color)')
             .on('mouseover', (event, d) => showTooltip(event, objectToString(d, { exclude: ['x', 'y', 'distance'] })))
             .on('mouseout', hideTooltip);
 
@@ -396,6 +408,10 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         };
 
         processTimeStepRef.current = () => {
+            if (!isPlayingRef.current){
+                return;
+            }
+            
                 const multiplier = speedMultiplierRef.current;
                 const stride = computeStride(multiplier);
                 const durationMs = computeDuration(multiplier);
@@ -406,8 +422,8 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                         ohtQueueRef.current.length > 1 &&
                         edgeQueueRef.current.length > 1
                     ) {
-                        ohtQueueRef.current.shift(); // 버림
-                        edgeQueueRef.current.shift(); // 버림
+                        ohtQueueRef.current.shift(); 
+                        edgeQueueRef.current.shift();
                         skip--;
                     }
 
@@ -442,7 +458,9 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                         const value = (displayModeRef.current === 'count')
                         ? rail_data.count / 100
                         : (rail_data.max_speed - rail_data.avg_speed) / rail_data.max_speed;
-                        rail_segment.setAttribute('stroke', colorScale(Math.max(0, Math.min(1, value))));
+
+                        const nextColor = colorScaleRef.current(Math.max(0, Math.min(1, value)));
+                        rail_segment.setAttribute("stroke", nextColor);
                     }
                     }
 
@@ -476,16 +494,15 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                         } 
                         else{
                         oht.transition()
-                            // .duration(200 / speedMultiplierRef.current)
-                            .duration(durationMs)                 // ★ 여기만 바뀜
+                            .duration(durationMs)           
                             .ease(d3.easeLinear)
                             .attr("fill", getColorByStatus(updatedOHT.status))
                             .attr("transform", `translate(${cx},${cy}) rotate(${updatedOHT.angleDeg})`)
-                            .on("end interrupt", doneOne);
+                            .on("end", doneOne)
+                            .on("interrupt", doneOne);
+
                         }
                 });
-
-                // isAfterCut.current = false;
 
                 if (stopAtRef.current - simulTime.current <= 1) {
                     setIsRunning(false);
@@ -524,48 +541,52 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         return "orange";
     };
 
+    const repaintRailsForTheme = () => {
+        requestAnimationFrame(() => {
+            railNodeMapRef.current.forEach((el, key) => {
+            const rail = railDataMapRef.current.get(key);
+            if (!rail) return;
 
-    const lightModeColors = {
-        node: "red",
-        rail: (d: Rail) => colorScale(Math.max(0, Math.min(1, displayModeRef.current === 'count' ? d.count / 100 : (d.max_speed - d.avg_speed) / d.max_speed))),
-        port: "green"
-    };
-    
-    const darkModeColors = {
-        node: "white",  
-        rail: (d: Rail) => colorScale(Math.max(0, Math.min(1, displayModeRef.current === 'count' ? d.count / 100 : (d.max_speed - d.avg_speed) / d.max_speed))).replace("rgb", "rgba").replace(")", ", 0.8)"),  // 반투명
-        port: "#00ff7f" 
-    };
-    
-    const updateColors = () => {
-        const colors = darkMode ? darkModeColors : lightModeColors;
+            if (d3.select(el).classed('removed')) return;
 
-        d3.selectAll(".node")
-            .attr("fill", colors.node);
+            const value = displayModeRef.current === 'count'
+                ? rail.count / 100
+                : (rail.max_speed - rail.avg_speed) / rail.max_speed;
 
-        d3.selectAll(".rail:not(.removed)")
-            .attr("stroke", d => colors.rail(d));
-
-        d3.selectAll(".port")
-            .attr("fill", colors.port);
+            el.setAttribute('stroke', colorScale(Math.max(0, Math.min(1, value))));
+            });
+        });
     };
     
 
     useEffect(() => {
+        const svg = d3.select(svgRef.current);
+        svg.style("background-color", darkMode ? "#0f172a" : "");
+
+
         if (darkMode) {
-            document.documentElement.classList.add("dark");
+            headerRef.current?.classList.add("dark");
+            footerRef.current?.classList.add("dark");
+            
+
+            d3.selectAll(".node").attr("fill", "white"); 
+
+
             localStorage.setItem("theme", "dark");
         } else {
-            document.documentElement.classList.remove("dark");
+            headerRef.current?.classList.remove("dark");
+            footerRef.current?.classList.remove("dark");
+
+
+
+            d3.selectAll(".node").attr("fill", "red"); 
             localStorage.setItem("theme", "light");
         }
+        repaintRailsForTheme()
 
-        updateColors();
     }, [darkMode]);
 
-    useEffect(() => {
-        speedMultiplierRef.current = speedMultiplier;
-    }, [speedMultiplier]);
+
 
     useEffect(() => {
         if (!isRunning) {
@@ -579,6 +600,14 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
         return () => clearInterval(interval);
         }, [isRunning]);
+
+    useEffect(() => {
+        speedMultiplierRef.current = speedMultiplier;
+    }, [speedMultiplier]);
+
+    useEffect(() => {
+        isPlayingRef.current = isPlaying;
+    }, [isPlaying]);
     
 
     const updateRailColor = (rail: Rail) => {
@@ -603,11 +632,6 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         };
 
     const modiRail = () => {
-        if (rafId.current) {
-            cancelAnimationFrame(rafId.current);
-            rafId.current = null;
-        }
-
         setIsLoading(true);
 
 
@@ -632,6 +656,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             if (isRemoved){
                 selectedRail.rail.avg_speed = 0;
             }
+            
             sel
             .attr('stroke', () => {
                 if (isRemoved) {
@@ -923,311 +948,300 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         svg.transition().call(zoomRef.current.scaleBy, 0.8);
     };
 
-
     return (
-        <div className={`flex flex-col h-screen ${darkMode ? "bg-[#0F172A] text-gray-200" : "bg-white text-gray-900"}`} onClick={() => setSelectedRail(null)}>
-            <header className={`flex justify-between items-center p-4 ${darkMode ? "bg-[#1E293B]" : "bg-[#F8FAFC]"} shadow-md`}>
+        <div
+            className="flex flex-col h-screen bg-white text-gray-900"
+            onClick={() => setSelectedRail(null)}
+        >
+            <header ref={headerRef} className="flex justify-between items-center p-4 bg-[#F8FAFC] shadow-md header">
             <h1 className="text-lg font-semibold tracking-wide">OHT Railway Simulation</h1>
-                <div className="flex gap-2">
-                    <button 
-                        className={`p-2 rounded ${displayMode === 'count' ? 'bg-blue-600' : 'bg-gray-600'} transition hover:bg-blue-700`}
-                        onClick={() => {
-                            displayModeRef.current = 'count';
-                            setDisplayMode('count');
-                            railsRef.current.forEach(updateRailColor);
-                        }}
-                    >
-                        Show Count
-                    </button>
-                    <button 
-                        className={`p-2 rounded ${displayMode === 'avg_speed' ? 'bg-blue-600' : 'bg-gray-600'} transition hover:bg-blue-700`}
-                        onClick={() => {
-                            displayModeRef.current = 'avg_speed';
-                            setDisplayMode('avg_speed');
-                            railsRef.current.forEach(updateRailColor);
-                        }}
-                    >
-                        Show Avg Speed
-                    </button>
-                </div>
-                <div className="flex gap-2">
-                    <button className="w-10 h-10 bg-blue-600 text-white rounded-full hover:bg-blue-800 flex items-center justify-center shadow-md" onClick={zoomIn}>+</button>
-                    <button className="w-10 h-10 bg-blue-600 text-white rounded-full hover:bg-blue-800 flex items-center justify-center shadow-md" onClick={zoomOut}>-</button>
 
-                    <button 
-                        className="p-2 bg-gray-700 text-white rounded hover:bg-gray-500 transition"
-                        onClick={() => setShowModal(true)}
-                        >
-                            View Simulations
-                        </button>
+            <div className="flex gap-2">
+                <button
+                className={`p-2 rounded transition hover:bg-blue-700 ${
+                    displayMode === "count" ? "bg-blue-600 text-white" : "bg-gray-600 text-white"
+                }`}
+                onClick={() => {
+                    displayModeRef.current = "count";
+                    setDisplayMode("count");
+                    railsRef.current.forEach(updateRailColor);
+                }}
+                >
+                Show Count
+                </button>
 
-                    <button 
-                        className="p-2 rounded-full bg-gray-600 hover:bg-gray-500 transition"
-                        onClick={() => setDarkMode(!darkMode)}
-                    >
-                        {darkMode ? <SunIcon className="w-6 h-6 text-yellow-400" /> : <MoonIcon className="w-6 h-6 text-gray-900" />}
-                    </button>
-                </div>
+                <button
+                className={`p-2 rounded transition hover:bg-blue-700 ${
+                    displayMode === "avg_speed" ? "bg-blue-600 text-white" : "bg-gray-600 text-white"
+                }`}
+                onClick={() => {
+                    displayModeRef.current = "avg_speed";
+                    setDisplayMode("avg_speed");
+                    railsRef.current.forEach(updateRailColor);
+                }}
+                >
+                Show Avg Speed
+                </button>
+            </div>
+
+            <div className="flex gap-2">
+                <button
+                className="w-10 h-10 bg-blue-600 text-white rounded-full hover:bg-blue-800 flex items-center justify-center shadow-md"
+                onClick={zoomIn}
+                >
+                +
+                </button>
+                <button
+                className="w-10 h-10 bg-blue-600 text-white rounded-full hover:bg-blue-800 flex items-center justify-center shadow-md"
+                onClick={zoomOut}
+                >
+                -
+                </button>
+
+                <button
+                className="p-2 bg-gray-700 text-white rounded hover:bg-gray-500 transition"
+                onClick={() => setShowModal(true)}
+                >
+                View Simulations
+                </button>
+
+                <button
+                className="p-2 rounded-full bg-gray-600 hover:bg-gray-500 transition"
+                onClick={() => setDarkMode(!darkMode)}
+                >
+                {darkMode ? (
+                    <SunIcon className="w-6 h-6 text-yellow-400" />
+                ) : (
+                    <MoonIcon className="w-6 h-6 text-gray-900" />
+                )}
+                </button>
+            </div>
             </header>
 
             <main className="flex-grow relative">
-                {isLoading && (
-                    <div className="absolute inset-0 flex justify-center items-center bg-gray-700 bg-opacity-80 z-10">
-                    <div className="w-16 h-16 border-4 border-gray-300 border-opacity-50 border-t-blue-500 border-t-4 rounded-full animate-spin"></div>
+            {isLoading && (
+                <div className="absolute inset-0 flex justify-center items-center bg-gray-700/80 z-10">
+                <div className="w-16 h-16 border-4 border-gray-300/50 border-t-blue-500 rounded-full animate-spin" />
                 </div>
-                )}
-                <div className="w-full h-full" onClick={() => setSelectedRail(null)}>
-                    <svg ref={svgRef} id="oht-visualization" className="w-full h-full">
-                        <g ref={gRef}></g>
-                    </svg>
+            )}
 
-                    <div id="tooltip" 
-                        className="tooltip"
+            <div className="w-full h-full" onClick={() => setSelectedRail(null)}>
+                <svg ref={svgRef} id="oht-visualization" className="w-full h-full">
+                    <g ref={gRef}></g>
+                </svg>
+
+                <div id="tooltip" className="tooltip" />
+
+                {selectedRail && (
+                    <button
                         style={{
-                            position: 'absolute', 
-                            visibility: 'hidden',
-                            background: darkMode ? '#1E293B' : '#fff',
-                            color: darkMode ? '#fff' : '#000',        
-                            border: `1px solid ${darkMode ? '#475569' : '#ccc'}`, 
-                            padding: '5px', 
-                            borderRadius: '5px', 
-                            pointerEvents: 'none', 
-                            fontSize: '10px'
-                        }}>
-                    </div>
+                        position: "absolute",
+                        ...computeButtonPosition(selectedRail.x, selectedRail.y),
+                        transform: "translate(20%, 0%)",
+                        background: d3
+                            .selectAll(".rail")
+                            .filter((d: any) => d === selectedRail.rail)
+                            .classed("removed")
+                            ? "#2563EB"
+                            : "#DC2626",
+                        color: "white",
+                        border: "none",
+                        borderRadius: "5px",
+                        padding: "5px 10px",
+                        cursor: "pointer",
+                        zIndex: 10,
+                        }}
+                        onClick={(e) => {
+                        e.stopPropagation();
+                        modiRail();
+                        }}
+                    >
 
-                    {selectedRail && (
-                        <button
-                            style={{
-                                position: 'absolute',
-                                ...computeButtonPosition(selectedRail.x, selectedRail.y),
-                                transform: 'translate(20%, 0%)',
-                                background: d3.selectAll('.rail')
-                                    .filter(d => d === selectedRail.rail)
-                                    .classed('removed') ? '#2563EB' : '#DC2626',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '5px',
-                                padding: '5px 10px',
-                                cursor: 'pointer',
-                                zIndex: 10,
-                            }}
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                modiRail();
-                            }}
-                        >
-                            {d3.selectAll('.rail')
-                                .filter(d => d === selectedRail.rail)
-                                .classed('removed') ? 'Restore Rail' : 'Remove Rail'}
-                        </button>
+                        {d3
+                        .selectAll(".rail")
+                        .filter((d: any) => d === selectedRail.rail)
+                        .classed("removed")
+                        ? "Restore Rail"
+                        : "Remove Rail"}
+                    </button>
                     )}
+            </div>
+
+            <div className="absolute bottom-4 right-4 z-50">
+                <div
+                className="flex flex-col items-center gap-3 px-3 py-3
+                            bg-transparent
+                            border border-gray-300/40
+                            rounded-md shadow-sm
+                            text-xs"
+                >
+                <SimulationControls
+                    isPlaying={isPlaying}
+                    onPlay={play}
+                    onPause={pause}
+                    onFaster={faster}
+                    onSlower={slower}
+                />
+
+                <div className="flex items-center gap-1">
+                    <span className="text-gray-600">⚡</span>
+                    <span className={`font-mono text-sm ${darkMode ? "text-white" : "text-gray-900"}`}>
+                    x{speeds[speedIndex]}
+                    </span>               
                 </div>
-                   <div className="absolute bottom-4 right-4 z-50">
-  <div className="flex flex-col items-center gap-3 px-3 py-3
-                  bg-transparent
-                  border border-gray-300/40 dark:border-gray-600/40
-                  rounded-md shadow-sm
-                  text-xs">
-    <SimulationControls
-      isPlaying={isPlaying}
-      onPlay={play}
-      onPause={pause}
-      onFaster={faster}
-      onSlower={slower}
-    />
 
-    <div className="flex items-center gap-1">
-      <span className="text-gray-600 dark:text-gray-300">⚡</span>
-      <span className="font-mono text-sm text-gray-900 dark:text-white">
-        x{speeds[speedIndex]}
-      </span>
-    </div>
-
-    <div className="flex flex-col items-center gap-2 mt-2">
-      <div className="flex items-center gap-1">
-        <span className="text-gray-600 dark:text-gray-300">⏱</span>
-        <span className="font-mono text-sm text-gray-900 dark:text-white">
-          {formatTime(currentSimulTime)}
-        </span>
-      </div>
-    </div>
-  </div>
-</div>
-
+                <div className="flex flex-col items-center gap-2 mt-2">
+                    <div className="flex items-center gap-1">
+                        <span className="text-gray-600">⏱</span>
+                        <span className={`font-mono text-sm ${darkMode ? "text-white" : "text-gray-900"}`}>
+                            {formatTime(currentSimulTime)}
+                        </span>
+                    </div>
+                </div>
+                </div>
+            </div>
             </main>
-            <footer className={`flex flex-col md:flex-row items-center justify-between p-4 ${darkMode ? "bg-[#1E293B]" : "bg-[#E2E8F0]"} shadow-lg`}>
 
-           
-                <div className="flex flex-col md:flex-row gap-6 items-center">
-                    <div className="flex flex-col items-center gap-4">
-                        <span className="text-sm font-semibold">OHT Mode</span>
-                        <label className="flex items-center cursor-pointer">
-                            <input
-                                type="radio"
-                                name="ohtMode"
-                                value="random"
-                                checked={ohtMode === "random"}
-                                onChange={() => setOhtMode("random")}
-                                className="hidden"
-                            />
-                            <span className={`px-3 py-1 rounded-lg transition text-sm font-medium cursor-pointer
-                                ${ohtMode === "random" ? "bg-blue-600 text-white" : "bg-gray-300 dark:bg-gray-600 text-black dark:text-white"}
-                            `}>
-                                Random
-                            </span>
-                        </label>
+            <footer ref={footerRef} className="flex flex-col md:flex-row items-center justify-between p-4 bg-[#E2E8F0] shadow-lg footer">
+            <div className="flex flex-col md:flex-row gap-6 items-center">
+                <div className="flex flex-col items-center gap-4">
+                <span className="text-sm font-semibold">OHT Mode</span>
 
-                        <label className="flex items-center cursor-pointer">
-                            <input
-                                type="radio"
-                                name="ohtMode"
-                                value="file"
-                                checked={ohtMode === "file"}
-                                onChange={() => setOhtMode("file")}
-                                className="hidden"
-                            />
-                            <span className={`px-3 py-1 rounded-lg transition text-sm font-medium cursor-pointer
-                                ${ohtMode === "file" ? "bg-blue-600 text-white" : "bg-gray-300 dark:bg-gray-600 text-black dark:text-white"}
-                            `}>
-                                File Upload
-                            </span>
-                        </label>
-                    </div>
+                <label className="flex items-center cursor-pointer">
+                    <input type="radio" name="ohtMode" value="random" checked={ohtMode === "random"} onChange={() => setOhtMode("random")} className="hidden" />
+                    <span
+                    className={`px-3 py-1 rounded-lg transition text-sm font-medium cursor-pointer ${
+                        ohtMode === "random" ? "bg-blue-600 text-white" : "bg-gray-300 text-black"
+                    }`}
+                    >
+                    Random
+                    </span>
+                </label>
 
-
-                    <div className="flex items-center gap-3">
-                        <input
-                            type="checkbox"
-                            checked={isAccelEnabled}
-                            onChange={handleAccelChange}
-                            className="h-5 w-5 rounded border-gray-400 text-blue-600 focus:ring focus:ring-blue-400"
-                        />
-                        <label className="text-sm font-medium">Enable Acceleration</label>
-                    </div>
-
-
-                    {isAccelEnabled && (
-                        <div className="flex flex-col items-center gap-3">
-                        <label className="text-sm font-semibold">Acceleration Time</label>
-                        <TimeInput
-                            ref={accTimeref}
-                            value={acceleratedTime}
-                            onChange={setAcceleratedTime}
-                            className={
-                            darkMode
-                                ? "border-gray-600 bg-gray-700 text-white"
-                                : "border-gray-400 bg-white text-black"
-                            }
-                        />
-                        </div>
-                    )}
-
-                    <div className="flex flex-col items-center gap-3">
-                        <label className="text-sm font-semibold">Max Time</label>
-                        <TimeInput
-                        ref={maxTimeref}
-                        value={maxTime}
-                        onChange={setMaxTime}
-                        className={
-                            darkMode
-                            ? "border-gray-600 bg-gray-700 text-white"
-                            : "border-gray-400 bg-white text-black"
-                        }
-                        />
-                    </div>
-
-                    
-                {ohtMode === "random" && (
-                        <div className="flex flex-col items-center gap-3">
-                            <label htmlFor="oht-count-input" className="text-sm font-semibold">
-                                Number of OHTs
-                            </label>
-                            <input
-                                id="oht-count-input"
-                                type="number"
-                                value={ohtCount}
-                                onChange={(e) => setOhtCount(Number(e.target.value))}
-                                className={`p-2 rounded-md border ${darkMode ? "border-gray-600 bg-gray-700 text-white" : "border-gray-400 bg-white text-black"} 
-                                focus:outline-none focus:ring focus:ring-blue-500 w-32 text-center`}
-                            />
-                        </div>
-                    )}
-                    
- 
+                <label className="flex items-center cursor-pointer">
+                    <input type="radio" name="ohtMode" value="file" checked={ohtMode === "file"} onChange={() => setOhtMode("file")} className="hidden" />
+                    <span
+                    className={`px-3 py-1 rounded-lg transition text-sm font-medium cursor-pointer ${
+                        ohtMode === "file" ? "bg-blue-600 text-white" : "bg-gray-300 text-black"
+                    }`}
+                    >
+                    File Upload
+                    </span>
+                </label>
                 </div>
 
+                <div className="flex items-center gap-3">
+                <input
+                    type="checkbox"
+                    checked={isAccelEnabled}
+                    onChange={(e) => setIsAccelEnabled(e.target.checked)}
+                    className="h-5 w-5 rounded border-gray-400 text-blue-600 focus:ring focus:ring-blue-400"
+                />
+                <label className="text-sm font-medium">Enable Acceleration</label>
+                </div>
 
-                {ohtMode === "file" && (
-                    <div className="flex flex-col md:flex-row gap-6 items-center mt-4">
-                        <div className="flex flex-col items-center">
-                            <label className={`flex flex-col items-center px-4 py-2 ${darkMode ? "bg-blue-700 hover:bg-blue-800" : "bg-blue-500 hover:bg-blue-600"} text-white rounded-lg shadow-md transition cursor-pointer`}>
-                                📂 Upload Job File
-                                <input ref={jobFileInputRef} type="file" accept=".csv" className="hidden" onChange={handleFileChange} />
-                            </label>
-                            {selectedJobFile ? (
-                                <p className="text-sm text-green-400 mt-2">{selectedJobFile.name}</p>
-                            ) : (
-                                <p className="text-sm text-gray-400 mt-2">No file selected</p>
-                            )}
-                        </div>
-                        <div className="flex flex-col items-center">
-                            <label className={`flex flex-col items-center px-4 py-2 ${darkMode ? "bg-blue-700 hover:bg-blue-800" : "bg-blue-500 hover:bg-blue-600"} text-white rounded-lg shadow-md transition cursor-pointer`}>
-                                📂 Upload OHT File
-                                <input ref={OhtFileInputRef} type="file" accept=".csv" className="hidden" onChange={handleFileChange} />
-                            </label>
-                            {selectedOhtFile ? (
-                                <p className="text-sm text-green-400 mt-2">{selectedOhtFile.name}</p>
-                            ) : (
-                                <p className="text-sm text-gray-400 mt-2">No file selected</p>
-                            )}
-                        </div>
-                    </div>
+                {isAccelEnabled && (
+                <div className="flex flex-col items-center gap-3">
+                    <label className="text-sm font-semibold">Acceleration Time</label>
+                    <TimeInput
+                    ref={accTimeref}
+                    value={acceleratedTime}
+                    onChange={setAcceleratedTime}
+                    className="border border-gray-400 bg-white text-black"
+                    />
+                </div>
                 )}
 
-                <div className="flex flex-col md:flex-row gap-6 items-center mt-4">
-
-                <button
-                    className={`px-6 py-3 rounded-lg shadow-md transition text-white ${
-                        isRunningBack ? "bg-red-500 hover:bg-red-600" : "bg-green-500 hover:bg-green-600"
-                    }`}
-                    onClick={() => {
-                        if (!isRunningBack) {
-                            startBackSimulation();
-                        } else {
-                            stopBackSimulation();
-                        }
-                    }}
-                >
-                    {isRunningBack ? "Stop Simulation Only" : "Start Simulation Only"}
-                </button>
-
-                <button
-                    className={`px-6 py-3 rounded-lg shadow-md transition text-white ${
-                        isRunning ? "bg-red-500 hover:bg-red-600" : "bg-green-500 hover:bg-green-600"
-                    }`}
-                    onClick={() => {
-                        if (!isRunning) {
-                            resetSimulation();
-                            startSimulation();
-                        } else {
-                            resetSimulation();
-                            stopSimulation();
-                            resetSimulation();
-
-                        }
-                    }}
-                >
-                    {isRunning ? "Stop Simulation" : "Start Simulation"}
-                </button>
+                <div className="flex flex-col items-center gap-3">
+                <label className="text-sm font-semibold">Max Time</label>
+                <TimeInput
+                    ref={maxTimeref}
+                    value={maxTime}
+                    onChange={setMaxTime}
+                    className="border border-gray-400 bg-white text-black"
+                />
                 </div>
+
+                {ohtMode === "random" && (
+                <div className="flex flex-col items-center gap-3">
+                    <label htmlFor="oht-count-input" className="text-sm font-semibold">
+                    Number of OHTs
+                    </label>
+                    <input
+                    id="oht-count-input"
+                    type="number"
+                    value={ohtCount}
+                    onChange={(e) => setOhtCount(Number(e.target.value))}
+                    className="p-2 rounded-md border border-gray-400 bg-white text-black focus:outline-none focus:ring focus:ring-blue-500 w-32 text-center"
+                    />
+                </div>
+                )}
+            </div>
+
+            {ohtMode === "file" && (
+                <div className="flex flex-col md:flex-row gap-6 items-center mt-4">
+                <div className="flex flex-col items-center">
+                    <label className="flex flex-col items-center px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg shadow-md transition cursor-pointer">
+                    📂 Upload Job File
+                    <input ref={jobFileInputRef} type="file" accept=".csv" className="hidden" onChange={handleFileChange} />
+                    </label>
+                    {selectedJobFile ? (
+                    <p className="text-sm text-green-600 mt-2">{(selectedJobFile as any).name}</p>
+                    ) : (
+                    <p className="text-sm text-gray-500 mt-2">No file selected</p>
+                    )}
+                </div>
+
+                <div className="flex flex-col items-center">
+                    <label className="flex flex-col items-center px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg shadow-md transition cursor-pointer">
+                    📂 Upload OHT File
+                    <input ref={OhtFileInputRef} type="file" accept=".csv" className="hidden" onChange={handleFileChange} />
+                    </label>
+                    {selectedOhtFile ? (
+                    <p className="text-sm text-green-600 mt-2">{(selectedOhtFile as any).name}</p>
+                    ) : (
+                    <p className="text-sm text-gray-500 mt-2">No file selected</p>
+                    )}
+                </div>
+                </div>
+            )}
+
+            <div className="flex flex-col md:flex-row gap-6 items-center mt-4">
+                <button
+                className={`px-6 py-3 rounded-lg shadow-md transition text-white ${
+                    isRunningBack ? "bg-red-500 hover:bg-red-600" : "bg-green-500 hover:bg-green-600"
+                }`}
+                onClick={() => {
+                    if (!isRunningBack) startBackSimulation();
+                    else stopBackSimulation();
+                }}
+                >
+                {isRunningBack ? "Stop Simulation Only" : "Start Simulation Only"}
+                </button>
+
+                <button
+                className={`px-6 py-3 rounded-lg shadow-md transition text-white ${
+                    isRunning ? "bg-red-500 hover:bg-red-600" : "bg-green-500 hover:bg-green-600"
+                }`}
+                onClick={() => {
+                    if (!isRunning) {
+                    resetSimulation();
+                    startSimulation();
+                    } else {
+                    resetSimulation();
+                    stopSimulation();
+                    resetSimulation();
+                    }
+                }}
+                >
+                {isRunning ? "Stop Simulation" : "Start Simulation"}
+                </button>
+            </div>
             </footer>
-
-
 
             {showModal && <Modal onClose={() => setShowModal(false)} />}
         </div>
-    );
+        );
 };
 
 export default OHTVisualization;

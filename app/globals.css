@@ -32,21 +32,48 @@ body {
   }
 }
 
-.rail { transition: none; }
-
-.node { fill: red; }
-.port { fill: green; }
-.tooltip-panel {
-  background: #fff;
-  color: #000;
-  border: 1px solid #ccc;
+:root {
+  --node-color: red;
+  --port-color: green;
 }
 
-.dark .node { fill: #ffffff; }
-.dark .port { fill: #00ff7f; }
-.dark .rail { opacity: 0.85; }
-.dark .tooltip-panel {
-  background: #1E293B;
+
+.header {
+  background: #f8fafc;   
+  color: #111827;       
+}
+
+.footer {
+  background: #e2e8f0;  
+  color: #111827;
+}
+
+.header.dark {
+  background: #1e293b;   
+  color: #e5e7eb;        
+}
+
+.footer.dark {
+  background: #1e293b;
+  color: #e5e7eb;
+}
+
+.tooltip.dark {
+  background: #1e293b;
   color: #fff;
   border: 1px solid #475569;
+}
+
+
+.tooltip {
+  position: absolute;
+  visibility: hidden;
+  padding: 5px;
+  border-radius: 5px;
+  pointer-events: none;
+  font-size: 10px;
+
+  background: #fff;
+  color: #000;
+  border: 1px solid black;
 }

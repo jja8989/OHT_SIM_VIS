@@ -49,16 +49,6 @@ const Modal: React.FC<ModalProps> = ({ onClose }) => {
         socket.emit("get_simulation_data", { table_name: tableName });
 
         socket.on("simulation_data", (data) => {
-
-            // const pivotData: Record<string, Record<string, number>> = {};
-
-    
-            // data.data.forEach(({ time, edge_id, avg_speed }) => {
-            //     if (!pivotData[time]) pivotData[time] = { time };
-            //     pivotData[time][edge_id] = avg_speed;
-            // });
-    
-            // setSimulationData(Object.values(pivotData)); 
         
             const pivotMap: Record<string, Record<string, number>> = {};
             const allEdges = new Set<string>();
@@ -71,10 +61,8 @@ const Modal: React.FC<ModalProps> = ({ onClose }) => {
             allEdges.add(edge_id);
             }
 
-            // 2) 시간 정렬(문자열 HH:MM:SS 정렬은 안전)
             const times = Object.keys(pivotMap).sort();
 
-            // 3) 안정적인 헤더: time + 정렬된 edge_id
             const edgeHeaders = Array.from(allEdges).sort();
             const rows: any[] = [];
 
@@ -92,37 +80,16 @@ const Modal: React.FC<ModalProps> = ({ onClose }) => {
         });
     };
     
-
-    // const downloadCSV = () => {
-    //     if (!selectedTable || simulationData.length === 0) return;
-
-    //     const headers = Object.keys(simulationData[0]).join(",");
-    //     const rows = simulationData.map((row) =>
-    //         Object.values(row).join(",")
-    //     ).join("\n");
-    
-    //     const csvContent = "data:text/csv;charset=utf-8," + headers + "\n" + rows;
-    //     const encodedUri = encodeURI(csvContent);
-    //     const link = document.createElement("a");
-    //     link.setAttribute("href", encodedUri);
-    //     const timestamp = new Date().toISOString().replace(/[-:]/g, "").split(".")[0];
-    //     link.setAttribute("download", `${selectedTable}_${timestamp}.csv`);
-    //     document.body.appendChild(link);
-    //     link.click();
-    // };
-
     const downloadCSV = () => {
         if (!selectedTable || simulationData.length === 0) return;
 
-        // ✅ 안정 헤더 구성 (모든 행의 키 합집합으로 재계산)
         const headerSet = new Set<string>(["time"]);
         for (const r of simulationData) {
             Object.keys(r).forEach((k) => headerSet.add(k));
         }
-        headerSet.delete("time"); // time을 맨 앞으로
+        headerSet.delete("time");
         const headers = ["time", ...Array.from(headerSet).sort()];
 
-        // ✅ CSV 인코딩: 값에 콤마/따옴표 있으면 안전하게 감싸기
         const esc = (v: any) => {
             if (v === null || v === undefined) return "";
             const s = String(v);

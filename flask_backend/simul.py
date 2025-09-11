@@ -31,13 +31,7 @@ class node():
         self.outgoing_edges = []
 
 class EdieWindow:
-    """
-    Edie 정의 기반 윈도우 평균속도 집계기.
-    - 매 스텝(now)마다: 엣지 위 OHT 수 n, 그들의 평균속도 v_avg를 받아
-      dist += v_avg * n * dt, time += n * dt 로 누적 (동시점유 반영)
-    - 버킷(기본 1초) 링버퍼로 슬라이딩 윈도우 유지
-    - sum_time==0이면 '정의 불가'이므로 last_avg를 그대로 유지
-    """
+
     def __init__(self, window_sec: float, vmax: float, bin_sec: float = 1.0):
         self.W = float(window_sec)
         self.V = float(vmax)
@@ -62,7 +56,7 @@ class EdieWindow:
     def _add_bin(self, b: int, d: float, u: float):
         i = b % self.N
         if self.bins_id[i] != b:
-            # 재사용 전에 기존 기여 제거
+         
             self.sum_dist -= self.bins_dist[i]
             self.sum_time -= self.bins_time[i]
             self.bins_dist[i] = 0.0
@@ -91,7 +85,7 @@ class EdieWindow:
             h += 1
         self.head_id = h
 
-    # 외부 API
+
     def clear(self, now: float | None = None):
         self.bins_dist = [0.0] * self.N
         self.bins_time = [0.0] * self.N
@@ -101,10 +95,8 @@ class EdieWindow:
         self.head_id = None
         self.anchor = now
         self._last_eval_bin = -1
-        # last_avg는 유지(시각화 안정). 초기화까지 원하면 self.last_avg= self.V/0.0로 조정
         
     def reset(self, anchor: float):
-        # 창을 완전히 비우고, 다음 적산을 anchor 시각부터 시작
         self.bins_dist = [0.0] * self.N
         self.bins_time = [0.0] * self.N
         self.bins_id   = [None] * self.N
@@ -116,33 +108,22 @@ class EdieWindow:
         
         
     def seed_freeflow(self, now: float):
-        """[now - W, now) 구간을 '가상 1대가 V로 통과'했다고 채우기"""
-        # self.reset(now - self.W)
-        # # anchor = now - W 상태에서 now까지 누적 → 창이 V로 가득
-        # self.accumulate(now, self.V, 1)
-        # self.last_avg = self.V
         self.seed_with(now, self.V, n=1.0, fill=1.0)
         
     def seed_with(self, now: float, v: float, n: float = 1.0, fill: float = 1.0):
-        """
-        [now - fill*W, now) 구간을 'n대가 속도 v로 통과'했다고 가정해 한 번에 채움.
-        - fill: 0~1 (1이면 창 전체, 0.3이면 창의 30%만)
-        """
+
         fill = max(0.0, min(1.0, float(fill)))
         v = max(0.0, min(self.V, float(v)))
         if fill <= 0.0 or n <= 0.0:
-            self.reset(now)          # 그냥 비우고 앵커만 now
+            self.reset(now)          
             return
         self.reset(now - fill * self.W)
-        self.accumulate(now, v, n)   # 여기서 last_avg도 갱신되도록
-        self.last_avg = v            # 즉시 표시 안정
+        self.accumulate(now, v, n)  
+        self.last_avg = v          
 
 
     def accumulate(self, now: float, v_avg: float, n_veh: int):
-        """
-        anchor~now 구간을 v_avg, n_veh 로 적산하여 윈도우에 반영.
-        n_veh==0이면 '엣지 점유가 없었음' → 누적 없음(Edie 정의 그대로).
-        """
+
         if self.anchor is None:
             self.anchor = now
             return
@@ -151,7 +132,6 @@ class EdieWindow:
             return
 
         if n_veh <= 0:
-            # 점유 없으면 누적 없이 기준만 이동
             self.anchor = now
             return
 
@@ -159,7 +139,6 @@ class EdieWindow:
         if v < 0.0: v = 0.0
         elif v > self.V: v = self.V
 
-        # 동시점유 반영: dist = v * n * dt, time = n * dt
         b1 = self._bid(t1)
         b2 = self._bid(t2 - 1e-12)
         bw = self.bin
@@ -227,7 +206,7 @@ class edge():
         self._ensure_rt(time_window, bin_sec=1.0)
         rt = self._rt
 
-        # 제거된 엣지는 0으로
+
         if self.is_removed:
             rt.clear(current_time)
             self.avg_speed = 0.0
@@ -236,7 +215,6 @@ class edge():
         if (current_time <= 0.15):
             rt.seed_freeflow(current_time)
 
-        # 현재 엣지 위 OHT 평균속도/대수
         n = len(self.OHTs)
         if n > 0:
             maxV = float(self.max_speed)
@@ -248,13 +226,13 @@ class edge():
                 ssum += s
             v_avg = ssum / n
 
-            # 실제 점유 누적
+      
             rt.accumulate(current_time, v_avg, n)
 
         else:
             rt.accumulate(current_time, self.max_speed, 1)
 
-        # 평균 계산
+      
         v = rt.get_avg(current_time, per_second_gate=False)
 
         self.avg_speed = v
@@ -395,8 +373,6 @@ class OHT():
         if self.is_arrived():
             self.arrive()
             return
-
-        # self.speed = min(max(self.speed + self.acc * time_step, 0), edge.max_speed)
         
     def is_arrived(self):
         
@@ -733,14 +709,6 @@ class AMHS:
                 e._rt.reset(self.current_time)
             e.avg_speed = 0.0 
             
-            # removed_edge = self.get_edge(source, dest)
-            # self.edge_map[removed_edge].is_removed = True
-            # try:       
-            #     self.graph.removeEdge(self.node_id_map[source], self.node_id_map[dest])
-            #     self.apsp = nk.distance.APSP(self.graph)
-            #     self.apsp.run()
-            # except:
-            #     print(source, dest)
         else:
             e.is_removed = False
             if edge_key:
@@ -752,15 +720,6 @@ class AMHS:
             if e._rt is not None:
                 e._rt.reset(self.current_time)
                 
-            # edge_to_restore = self.get_edge(source, dest)
-            # self.edge_map[edge_to_restore].is_removed = False
-            # if edge_to_restore:
-            #     self.graph.addEdge(self.node_id_map[source], self.node_id_map[dest], self.edge_map[edge_to_restore].length)
-            #     self.apsp = nk.distance.APSP(self.graph)
-            #     self.apsp.run()
-            # else:
-            #     print(f"Rail {source} -> {dest} not found in original edges.")
-        
     
     def reinitialize_simul(self, oht_positions, edge_data):
         for edge in self.edges:
@@ -960,7 +919,7 @@ class AMHS:
                     oht.cal_pos(time_step*10)
 
                 if _current_time - last_saved_time > 10:
-                    edge_data = [(last_saved_time+10, edge.id, edge.avg_speed) for edge in self.edges]
+                    edge_data = [(last_saved_time+10, edge.id, round(edge.avg_speed, 2)) for edge in self.edges]
                     self.queue.put(edge_data)
                     last_saved_time += 10
                     
@@ -971,9 +930,6 @@ class AMHS:
             
         
         last_saved_time = ((current_time - 10) // 10) * 10
-        
-        edge_metrics_cache = {} 
-        
 
         while current_time <= max_time:
             if self.stop_simulation_event.is_set():
@@ -996,7 +952,7 @@ class AMHS:
                 oht.cal_pos(time_step)
                 
             if current_time - last_saved_time > 10:
-                edge_data = [(last_saved_time+10, edge.id, edge.avg_speed) for edge in self.edges]
+                edge_data = [(last_saved_time+10, edge.id, round(edge.avg_speed, 2)) for edge in self.edges]
                 self.queue.put(edge_data)
                 last_saved_time += 10
                 
@@ -1022,21 +978,11 @@ class AMHS:
 
                 updated_edges = []
                 for edge in self.edges:
-                    # key = f"{edge.source}-{edge.dest}"
-                    # new_metrics = {"count": edge.count, "avg_speed": edge.avg_speed}
-                    # if edge_metrics_cache.get(key) != new_metrics:
-                    #     edge_metrics_cache[key] = new_metrics
-                    #     updated_edges.append({
-                    #         "from": edge.source,
-                    #         "to": edge.dest,
-                    #         **new_metrics
-                    #     })
-
                     updated_edges.append({
                         "from": edge.source,
                         "to": edge.dest,
                         "count": edge.count,
-                        "avg_speed": edge.avg_speed,
+                        "avg_speed": round(edge.avg_speed, 2),
                     })
 
                 payload = {
@@ -1090,7 +1036,7 @@ class AMHS:
                 oht.cal_pos(time_step*10)
 
             if _current_time - last_saved_time > 10:
-                edge_data = [(last_saved_time+10, edge.id, edge.avg_speed) for edge in self.edges]
+                edge_data = [(last_saved_time+10, edge.id, round(edge.avg_speed, 2)) for edge in self.edges]
                 self.back_queue.put(edge_data)
                 last_saved_time += 10
                 
@@ -1098,10 +1044,7 @@ class AMHS:
 
             _current_time += time_step*10
             count += 1
-            
         
-        edge_metrics_cache = {} 
-
         while current_time <= max_time:
             if self.back_stop_simulation_event.is_set():
                 break
@@ -1122,7 +1065,7 @@ class AMHS:
                 oht.cal_pos(time_step)
                 
             if current_time - last_saved_time > 10:
-                edge_data = [(last_saved_time+10, edge.id, edge.avg_speed) for edge in self.edges]
+                edge_data = [(last_saved_time+10, edge.id, round(edge.avg_speed, 2)) for edge in self.edges]
                 self.back_queue.put(edge_data)
                 last_saved_time += 10
     

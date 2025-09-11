@@ -4,9 +4,6 @@ import time
 import pandas as pd
 from simul import node, edge, port, AMHS
 
-# -------------------------------
-# 레이아웃 데이터 로드
-# -------------------------------
 with open("fab_oht_layout_updated.json") as f:
     layout_data = json.load(f)
 
@@ -35,9 +32,7 @@ ports = [
     for p in layout_data['ports']
 ]
 
-# -------------------------------
-# 시뮬레이션 실행 (소켓 없이)
-# -------------------------------
+
 def run_benchmark(num_ohts=200, max_time=2000, time_step=0.1):
     amhs = AMHS(nodes=nodes, edges=edges, ports=ports, num_OHTs=num_ohts, max_jobs=1000)
 

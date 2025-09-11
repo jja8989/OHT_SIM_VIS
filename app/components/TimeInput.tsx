@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef, forwardRef } from "react";
 
 interface TimeInputProps {
-  value: number; // seconds
+  value: number; 
   onChange: (seconds: number) => void;
   className?: string;
 }
@@ -31,14 +31,11 @@ const TimeInput = forwardRef<HTMLInputElement, TimeInputProps>(
     const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
       const inputEl = innerRef.current;
       const pos = inputEl?.selectionStart ?? 0;
-
-      // 숫자 입력
       if (/^[0-9]$/.test(e.key)) {
         e.preventDefault();
         if (pos >= str.length) return;
 
         let newPos = pos;
-        // 콜론 자리는 건너뛰기
         if (str[pos] === ":") newPos++;
 
         const newStr =
@@ -49,7 +46,6 @@ const TimeInput = forwardRef<HTMLInputElement, TimeInputProps>(
         moveCaret(newPos + 1);
       }
 
-      // 백스페이스 입력
       if (e.key === "Backspace") {
         e.preventDefault();
         if (pos <= 0) return;
@@ -75,7 +71,7 @@ const TimeInput = forwardRef<HTMLInputElement, TimeInputProps>(
     return (
       <input
         ref={(node) => {
-          // 외부 ref와 내부 ref 동기화
+
           if (typeof ref === "function") {
             ref(node);
           } else if (ref) {
@@ -93,6 +89,6 @@ const TimeInput = forwardRef<HTMLInputElement, TimeInputProps>(
   }
 );
 
-TimeInput.displayName = "TimeInput"; // forwardRef 쓰면 이름 지정 필수
+TimeInput.displayName = "TimeInput"; 
 export default TimeInput;
 
