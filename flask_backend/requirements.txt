@@ -8,4 +8,5 @@ python-engineio==4.9.1
 python-socketio==5.11.3
 ray==2.41.0
 Werkzeug==3.0.3
+torch==2.2.0
 psycopg2

@@ -31,6 +31,8 @@ interface Rail {
     count: number;
     max_speed : number;
     avg_speed : number;
+    pred_30?: number;
+    pred_60?: number;
 }
 
 interface Port {
@@ -59,6 +61,12 @@ interface LayoutData {
 interface OHTVisualizationProps {
     data: LayoutData;
 }
+
+interface EdgeQueueItem {
+  updates: any[];
+  pred?: Record<string, number[]>; // { "30": [...], "60": [...] } 이런 형태
+}
+
 
 const decompressData = (compressedData: string) => {
     try {
@@ -94,7 +102,10 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     const simulTime = useRef(0);
 
 
-    const [displayMode, setDisplayMode] = useState<'count' | 'avg_speed'>('count');
+    // const [displayMode, setDisplayMode] = useState<'count' | 'avg_speed'>('count');
+    // const displayModeRef = useRef(displayMode);
+
+    const [displayMode, setDisplayMode] = useState<'count' | 'avg_speed' | 'pred30' | 'pred60'>('count');
     const displayModeRef = useRef(displayMode);
 
     const lastOHTPositions = useRef<OHT[]>([]);
@@ -115,7 +126,11 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     const [isLoading, setIsLoading] = useState(false); 
 
     const ohtQueueRef = useRef<Array<{ time: number; updates: any[] }>>([]);
-    const edgeQueueRef = useRef<Array<{ updates: any[] }>>([]);
+    // const edgeQueueRef = useRef<Array<{ updates: any[] }>>([]);
+
+    const edgeQueueRef = useRef<EdgeQueueItem[]>([]);
+    // const predQueueRef = useRef<Array<{ pred: Record<string, Record<string, number>> }>>([]);
+
 
     const yScaleRef = useRef<d3.ScaleLinear<number, number>>(d3.scaleLinear());
 
@@ -147,16 +162,27 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     const BASE_STEP_MS = 100; 
 
     const computeStride = (multiplier: number) =>
-    Math.max(1, Math.floor(multiplier)); 
+        Math.max(1, Math.floor(multiplier)); 
 
     const computeDuration = (multiplier: number) =>
-    multiplier >= 1 ? BASE_STEP_MS     
-                    : BASE_STEP_MS / Math.max(1e-3, multiplier);
+        multiplier >= 1 ? BASE_STEP_MS     
+                        : BASE_STEP_MS / Math.max(1e-3, multiplier);
 
     const [currentSimulTime, setCurrentSimulTime] = useState(0);
 
     const headerRef = useRef<HTMLElement | null>(null);
     const footerRef = useRef<HTMLElement | null>(null);
+
+
+    const edgeHistoriesRef = useRef<Map<
+        string,
+        Array<{ time: number; avg: number; p30?: number; p60?: number }>
+        >>(new Map());
+
+
+    const hoveredKeyRef = useRef<string | null>(null);
+    const miniChartRef = useRef<HTMLDivElement | null>(null);
+
 
 
     const colorScale = useMemo(() => {
@@ -173,7 +199,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     const colorScaleRef = useRef(colorScale);
 
     useEffect(() => {
-    colorScaleRef.current = colorScale;
+        colorScaleRef.current = colorScale;
     }, [colorScale]);
 
 
@@ -223,50 +249,52 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
     const play = () => {
     d3.selectAll(".oht").interrupt();
 
+    setIsPlaying(true);
+    
     if (!rafId.current) {
         rafId.current = requestAnimationFrame(processTimeStepRef.current);
     }
-    setIsPlaying(true);
+
     };
 
     const pause = () => {
     d3.selectAll(".oht").interrupt();
+    setIsPlaying(false);
 
     if (rafId.current) {
         cancelAnimationFrame(rafId.current);
         rafId.current = null;
     }
 
-    setIsPlaying(false);
+
     };
 
     const faster = () => {
     
-        d3.selectAll(".oht").interrupt();
+        // d3.selectAll(".oht").interrupt();
+
         setSpeedIndex(prev => {
             const next = Math.min(prev + 1, speeds.length - 1);
             setSpeedMultiplier(speeds[next]);
 
-            if (isPlaying) {
-            rafId.current = requestAnimationFrame(processTimeStepRef.current);
-            }
+            // if (isPlayingRef.current) {
+            // rafId.current = requestAnimationFrame(processTimeStepRef.current);
+            // }
             return next;
         });
         };
 
         const slower = () => {
-        if (rafId.current) {
-            cancelAnimationFrame(rafId.current);
-            rafId.current = null;
-        }
-        d3.selectAll(".oht").interrupt();
+
+        // d3.selectAll(".oht").interrupt();
+
         setSpeedIndex(prev => {
             const next = Math.max(prev - 1, 0);
             setSpeedMultiplier(speeds[next]);
 
-            if (isPlaying) {
-            rafId.current = requestAnimationFrame(processTimeStepRef.current);
-            }
+            // if (isPlayingRef.current) {
+            // rafId.current = requestAnimationFrame(processTimeStepRef.current);
+            // }
             return next;
         });
         };
@@ -318,19 +346,55 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             y: yScale(d.y)
         });
 
+        const tooltip = d3.select('#tooltip')
+            .style('position', 'absolute')
+            .style('visibility', 'hidden')
+            .style('z-index', '9999')       // 다른 요소 위로
+            .style('pointer-events', 'none')
+            .style('overflow', 'visible')
+            .style('background', darkMode ? 'rgba(15,23,42,0.9)' : 'rgba(255,255,255,0.95)')
+            .style('color', darkMode ? '#e5e7eb' : '#111827')
+            .style('border', `1px solid ${darkMode ? '#334155' : '#cbd5e1'}`)
+            .style('border-radius', '6px')
+            .style('padding', '8px 10px');
 
-        const tooltip = d3.select('#tooltip');
+        if (tooltip.select('#tip-info').empty()) {
+            tooltip.html(''); // 전체 초기화는 딱 1번만
+            tooltip.append('div')
+                .attr('id', 'tip-info')
+                .style('font-size', '12px')
+                .style('line-height', '1.3');
+
+            tooltip.append('div')
+            .attr('id', 'mini-chart')
+            .style('margin-top', '10px')
+            .style('width', '270px')
+            .style('height', '200px')
+            .style('background', darkMode ? 'rgba(255,255,255,0.95)' : 'rgba(0,0,0,0.75)')
+            .style('color', darkMode ? '#111827' : '#e5e7eb')
+            .style('border-radius', '4px')
+            .style('padding', '4px');
+
+            miniChartRef.current = document.getElementById('mini-chart') as HTMLDivElement;
+            } else {
+            miniChartRef.current = document.getElementById('mini-chart') as HTMLDivElement;
+            }
 
         const showTooltip = (event: MouseEvent, content: string) => {
-            tooltip.style('visibility', 'visible')
-                .style('left', `${event.pageX + 10}px`)
-                .style('top', `${event.pageY - 100}px`)
-                .html(content.replace(/\n/g, '<br>'));
-        };
+            tooltip
+                .style('visibility', 'visible')
+                .style('left', `${event.pageX + 12}px`)
+                .style('top', `${event.pageY - 120}px`);
+
+            tooltip.select('#tip-info').html(content.replace(/\n/g, '<br>'));
+            tooltip.select('#mini-chart').style('visibility', 'visible');
+            };
 
         const hideTooltip = () => {
-            tooltip.style('visibility', 'hidden');
+        tooltip.style('visibility', 'hidden');
+        tooltip.select('#mini-chart').style('visibility', 'hidden');
         };
+
 
         g.selectAll('.rail')
             .data(rails)
@@ -348,8 +412,22 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                     : (d.max_speed-d.avg_speed) / d.max_speed;
                 return colorScale(Math.max(0, Math.min(1, value)));
             })
-            .on('mouseover', (event, d) => showTooltip(event, objectToString(d, { exclude: ['curve'] })))
-            .on('mouseout', hideTooltip)
+            .on('mouseover', (event, d) => {
+                showTooltip(event, objectToString(d, { exclude: ['curve'] }))
+                  const key = `${d.from}-${d.to}`;
+                    hoveredKeyRef.current = key;
+
+                    // 첫 진입 시 즉시 차트 그리기
+                    drawEdgeMiniChart(key);
+                    d3.select(miniChartRef.current).style('visibility', 'visible');
+              
+            })
+            .on('mouseout', () => {
+                const chart = miniChartRef.current!;
+                chart.style.visibility = 'hidden';
+                hoveredKeyRef.current = null;
+                hideTooltip();
+                })
             .on('click', (event, d) => {
                 event.stopPropagation();
                 const fromNode = nodes.find(n => n.id === d.from);
@@ -399,10 +477,10 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             const decompressedData = decompressData(data.data);
             if (!decompressedData) return;
 
-            const { time, oht_positions, edges } = decompressedData;
+            const { time, oht_positions, edges, pred } = decompressedData;
 
             ohtQueueRef.current.push({ time, updates: oht_positions });
-            edgeQueueRef.current.push({ updates: edges });
+            edgeQueueRef.current.push({ updates: edges, pred });
 
             setIsLoading(false);
         };
@@ -416,16 +494,17 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                 const stride = computeStride(multiplier);
                 const durationMs = computeDuration(multiplier);
 
-                  let skip = Math.max(0, stride - 1);
-                    while (
-                        skip > 0 &&
-                        ohtQueueRef.current.length > 1 &&
-                        edgeQueueRef.current.length > 1
-                    ) {
-                        ohtQueueRef.current.shift(); 
-                        edgeQueueRef.current.shift();
-                        skip--;
-                    }
+                let skip = Math.max(0, stride - 1);
+
+                while (
+                    skip > 0 &&
+                    ohtQueueRef.current.length > 1 &&
+                    edgeQueueRef.current.length > 1
+                ) {
+                    ohtQueueRef.current.shift(); 
+                    edgeQueueRef.current.shift();
+                    skip--;
+                }
 
                 const ohtData = ohtQueueRef.current.shift();
                 const edgeData = edgeQueueRef.current.shift();                    
@@ -438,30 +517,91 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                 setIsLoading(false);
 
                 const { time: ohtTime, updates: ohtUpdates } = ohtData;
-                const { updates: edgeUpdates } = edgeData;
+                const { updates: edgeUpdates, pred } = edgeData;
 
 
                 let pending = ohtUpdates.length;
 
                 const commitStep = () => {
+                    // const { updates: edgeUpdates, pred } = edgeData; // pred 같이 꺼냄
+
                     for (const u of (edgeUpdates ?? [])) {
-                    const key = `${u.from}-${u.to}`;
-                    const rail_data    = railDataMapRef.current.get(key);
-                    const rail_segment = railNodeMapRef.current.get(key);
-                    if (!rail_data || !rail_segment) continue;
+                        const key = `${u.from}-${u.to}`;
+                        const rail_data    = railDataMapRef.current.get(key);
+                        const rail_segment = railNodeMapRef.current.get(key);
+                        if (!rail_data || !rail_segment) continue;
 
-                    rail_data.count     = u.count;
-                    rail_data.avg_speed = u.avg_speed;
+                        rail_data.count     = u.count;
+                        rail_data.avg_speed = u.avg_speed;
 
-                    const sel = d3.select(rail_segment);
-                    if (!sel.classed('removed')) {
-                        const value = (displayModeRef.current === 'count')
-                        ? rail_data.count / 100
-                        : (rail_data.max_speed - rail_data.avg_speed) / rail_data.max_speed;
+                        if (pred) {
+                            if (pred["30"]) rail_data.pred_30 = pred["30"][key];
+                            if (pred["60"]) rail_data.pred_60 = pred["60"][key];
+                            }
+
+                        const sel = d3.select(rail_segment);
+
+                        if (!sel.classed("removed")) {
+                        let value: number;
+
+                        if (displayModeRef.current === "count") {
+                            value = rail_data.count / 100;
+                        } else if (displayModeRef.current === "avg_speed") {
+                            value = (rail_data.max_speed - rail_data.avg_speed) / rail_data.max_speed;
+                        } else if (displayModeRef.current === "pred30") {
+                            value = (rail_data.max_speed - (rail_data.pred_30 ?? rail_data.avg_speed)) / rail_data.max_speed;
+                        } else if (displayModeRef.current === "pred60") {
+                            value = (rail_data.max_speed - (rail_data.pred_60 ?? rail_data.avg_speed)) / rail_data.max_speed;
+                        } else {
+                            value = 0;
+                        }
 
                         const nextColor = colorScaleRef.current(Math.max(0, Math.min(1, value)));
                         rail_segment.setAttribute("stroke", nextColor);
+                        }
+
+                        const histKey = key;
+                        const map = edgeHistoriesRef.current;
+                        let hist = map.get(histKey) ?? [];
+                        const nowSec = Math.floor(ohtTime); // 현재 시뮬레이션 시각(초)
+
+                        // 마지막 샘플 확인
+                        const last = hist[hist.length - 1];
+
+                        // 1) avg_speed는 1초마다만 기록
+                        if (!last || last.time < nowSec) {
+                        hist.push({
+                            time: nowSec,
+                            avg: rail_data.avg_speed,
+                            p30: last?.p30,
+                            p60: last?.p60,
+                        });
+                        }
+
+                        // 2) pred는 새로 들어왔을 때만(=10초) 덮어씀
+                        if (pred) {
+                        const p30 = pred["30"]?.[key];
+                        const p60 = pred["60"]?.[key];
+                        if (p30 !== undefined) {
+                            hist[hist.length - 1].p30 = p30;
+                        }
+                        if (p60 !== undefined) {
+                            hist[hist.length - 1].p60 = p60;
+                        }
+                        }
+
+                        // 3) 120초까지만 유지
+                        const cutoff = nowSec - 120;
+                        if (hist.length && hist[0].time < cutoff) {
+                        hist = hist.filter(d => d.time >= cutoff);
+                        }
+                        map.set(histKey, hist);
+
                     }
+
+
+                    if (hoveredKeyRef.current) {
+                    drawEdgeMiniChart(hoveredKeyRef.current);
                     }
 
                     simulTime.current = ohtTime;
@@ -541,6 +681,182 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         return "orange";
     };
 
+
+    function drawEdgeMiniChart(key: string) {
+        const wrap = miniChartRef.current;
+        if (!wrap) return;
+
+        const history = edgeHistoriesRef.current.get(key) ?? [];
+
+        if (!history.length) {
+            d3.select('#mini-chart').style('visibility', 'hidden');
+            return;
+        }
+
+        const isDark =
+            document.body.classList.contains("dark") ||
+            localStorage.getItem("theme") === "dark";
+        const axisTextColor = isDark ? "#334155"  : "#e5e7eb";
+        const axisLineColor = "#94a3b8";
+
+
+        const W = 270, H = 180;
+        const m = { t: 30, r: 10, b: 36, l: 46 };
+        const innerW = W - m.l - m.r;
+        const innerH = H - m.t - m.b;
+
+        let svg = d3.select(wrap).select<SVGSVGElement>("svg");
+
+        const firstDraw = svg.empty();
+
+        if (firstDraw) {
+            svg = d3.select(wrap).append("svg").attr("width", W).attr("height", H)
+
+            .style("overflow", "visible");
+
+            const g = svg.append("g").attr("transform", `translate(${m.l},${m.t})`);
+            g.append("g").attr("class", "x-axis").attr("transform", `translate(0,${innerH})`);
+            g.append("g").attr("class", "y-axis");
+            g.append("path").attr("class", "line-avg").attr("fill", "none").attr("stroke", "#60A5FA").attr("stroke-width", 2);
+            g.append("path").attr("class", "line-p30").attr("fill", "none").attr("stroke", "#F59E0B").attr("stroke-width", 2);
+            g.append("path").attr("class", "line-p60").attr("fill", "none").attr("stroke", "#34D399").attr("stroke-width", 2);
+            g.append("g").attr("class", "last-dots");
+
+            // 범례(실선)
+            const legend = [
+            {label:"avg",    color:"#60A5FA"},
+            {label:"pred30", color:"#F59E0B"},
+            {label:"pred60", color:"#34D399"},
+            ];
+            const lg = g.append("g").attr("class","legend").attr("transform", `translate(0,-10)`);
+            legend.forEach((l, i) => {
+            lg.append("line")
+                .attr("x1", 70 * i).attr("x2", 70 * i + 22)
+                .attr("y1", 0).attr("y2", 0)
+                .attr("stroke", l.color).attr("stroke-width", 2);
+            lg.append("text")
+                .attr("x", 70 * i + 26).attr("y", 4)
+                .attr("font-size", 10).attr("fill", axisTextColor)
+                .text(l.label);
+            });
+        }
+
+        const g = svg.select<SVGGElement>("g");
+
+        const tExtent = d3.extent(history, d => d.time) as [number, number];
+        const tMin = tExtent[0]!;
+
+        const last = history[history.length - 1];
+        const predHorizon = last ? last.time + 60 : 0;
+
+        const tMax = Math.max(tExtent[1]!, predHorizon, tMin + 1);
+
+        const x = d3.scaleLinear()
+        .domain([tMin, tMax])
+        .range([0, innerW]);
+
+        const maxSpeed = d3.max(history, d => Math.max(d.avg ?? 0, d.p30 ?? 0, d.p60 ?? 0)) || 1;
+        const y = d3.scaleLinear().domain([0, maxSpeed]).nice().range([innerH, 0]);
+
+        const minLabelPitch = 60;
+        const maxTicks = Math.max(2, Math.floor(innerW / minLabelPitch));
+        const tickValues = d3.ticks(tMin, tMax, maxTicks);
+
+
+
+        const xAxis = d3.axisBottom(x)
+        .tickValues(tickValues)
+        .tickFormat((v: any) => {
+            const secs = Number(v);
+            const h = Math.floor(secs / 3600);
+            const m = Math.floor((secs % 3600) / 60);
+            const s = secs % 60;
+
+            if (h > 0) {
+            return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
+            } else {
+            return `${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
+            }
+        });
+
+
+        const yAxis = d3.axisLeft(y).ticks(4).tickFormat(d3.format(".1f"));
+
+        g.select<SVGGElement>(".x-axis")
+            .transition().duration(300)
+            .call(xAxis as any)
+            .selection()
+            .selectAll("text").attr("fill", axisTextColor).style("font-size", 10)
+            .attr("dy", "0.85em"); 
+        g.select<SVGGElement>(".x-axis").selectAll("path,line").attr("stroke", axisLineColor).attr("opacity", 0.85);
+
+        g.select<SVGGElement>(".y-axis")
+            .transition().duration(300)
+            .call(yAxis as any)
+            .selection()
+            .selectAll("text").attr("fill", axisTextColor).style("font-size", 10);
+        g.select<SVGGElement>(".y-axis").selectAll("path,line").attr("stroke", axisLineColor).attr("opacity", 0.85);
+
+        // 라인 제너레이터
+        const lineAvg = d3.line<{time:number;avg:number}>()
+            .defined(d => d.avg !== undefined && !Number.isNaN(d.avg))
+            .x(d => x(d.time)).y(d => y(d.avg));
+        const lineP30 = d3.line<{time:number;p30?:number}>()
+            .defined(d => d.p30 !== undefined && !Number.isNaN(d.p30 as number))
+            .x(d => x(d.time + 30))   
+            .y(d => y(d.p30 as number));
+
+        const lineP60 = d3.line<{time:number;p60?:number}>()
+            .defined(d => d.p60 !== undefined && !Number.isNaN(d.p60 as number))
+            .x(d => x(d.time + 60))   
+            .y(d => y(d.p60 as number));
+
+        const morph = (sel: d3.Selection<SVGPathElement, unknown, any, any>, gen: any) => {
+            const prevD = sel.attr("d") || "";
+            const nextD = gen(history as any) || "";
+            if (firstDraw || !prevD) {
+                sel.attr("d", nextD);
+            } else if (prevD !== nextD) {
+                sel.transition().duration(260).attrTween("d", () => {
+                const i = d3.interpolateString(prevD, nextD);
+                return (t: number) => i(t);
+                });
+            }
+            };
+
+        morph(g.select<SVGPathElement>(".line-avg"), lineAvg);
+        morph(g.select<SVGPathElement>(".line-p30"), lineP30);
+        morph(g.select<SVGPathElement>(".line-p60"), lineP60);
+
+        const dotsData = [
+        {v:last.avg,  cls:"avg-dot",  color:"#60A5FA", tx:last.time},
+        {v:last.p30,  cls:"p30-dot",  color:"#F59E0B", tx:last.time + 30},
+        {v:last.p60,  cls:"p60-dot",  color:"#34D399", tx:last.time + 60},
+        ].filter(d=>d.v!==undefined) as {v:number;cls:string;color:string;tx:number}[];
+
+
+  const dots = g.select<SVGGElement>(".last-dots")
+    .selectAll<SVGCircleElement, any>("circle")
+    .data(dotsData, (d: any) => d.cls);
+
+  // enter
+  const enter = dots.enter()
+    .append("circle")
+    .attr("r", 0)
+    .attr("fill", d=>d.color)
+    .attr("cx", d=>x(d.tx))
+    .attr("cy", d=>y(d.v))
+    .transition().duration(220)
+    .attr("r", 2.5);
+
+    dots.transition().duration(260)
+    .attr("cx", d => x(d.tx))
+    .attr("cy", d => y(d.v));
+
+  // exit
+  dots.exit().transition().duration(200).attr("r", 0).remove();
+}
+
     const repaintRailsForTheme = () => {
         requestAnimationFrame(() => {
             railNodeMapRef.current.forEach((el, key) => {
@@ -618,7 +934,6 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
         const sel = d3.select(node);
         if (sel.classed('removed')) {
             node.setAttribute('stroke', 'gray');
-
             return;
         }
 
@@ -630,6 +945,8 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
         node.setAttribute('stroke', nextColor);
         };
+
+
 
     const modiRail = () => {
         setIsLoading(true);
@@ -823,10 +1140,13 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
 
         ohtQueueRef.current = [];
         edgeQueueRef.current = [];
+        edgeHistoriesRef.current.clear();
 
         railsRef.current.forEach((rail) => {
             rail.count = 0;
             rail.avg_speed = rail.max_speed;
+            rail.pred_30 = rail.max_speed;
+            rail.pred_60 = rail.max_speed;
         });
 
         d3.selectAll('.rail')
@@ -847,6 +1167,11 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                 : (d.max_speed-d.avg_speed) / d.max_speed;
             return colorScale(Math.max(0, Math.min(1, value))); 
         });
+
+        if (miniChartRef.current) {
+            d3.select(miniChartRef.current).selectAll("*").remove();
+            miniChartRef.current.style.visibility = "hidden";
+        }
 
         d3.selectAll('.oht').remove();
         setIsLoading(false);
@@ -954,10 +1279,10 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
             onClick={() => setSelectedRail(null)}
         >
             <header ref={headerRef} className="flex justify-between items-center p-4 bg-[#F8FAFC] shadow-md header">
-            <h1 className="text-lg font-semibold tracking-wide">OHT Railway Simulation</h1>
+            <h1 className="text-lg font-semibold tracking-wide">OHT Railway Network Simulation</h1>
 
             <div className="flex gap-2">
-                <button
+                {/* <button
                 className={`p-2 rounded transition hover:bg-blue-700 ${
                     displayMode === "count" ? "bg-blue-600 text-white" : "bg-gray-600 text-white"
                 }`}
@@ -981,6 +1306,49 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                 }}
                 >
                 Show Avg Speed
+                </button> */}
+
+                <button
+                    className={`p-2 rounded transition ${displayMode === "count" ? "bg-blue-600 text-white" : "bg-gray-600 text-white"}`}
+                    onClick={() => {
+                        setDisplayMode("count")
+                        displayModeRef.current = "count"
+                    }}
+                >
+                    Show Count
+                </button>
+
+                <button
+                    className={`p-2 rounded transition ${displayMode === "avg_speed" ? "bg-blue-600 text-white" : "bg-gray-600 text-white"}`}
+                    onClick={() => {
+                        setDisplayMode("avg_speed")
+                        displayModeRef.current = "avg_speed"
+                    }
+                    }
+                >
+                    Show Avg Speed
+                </button>
+
+                <button
+                    className={`p-2 rounded transition ${displayMode === "pred30" ? "bg-blue-600 text-white" : "bg-gray-600 text-white"}`}
+                    onClick={() => {
+                        setDisplayMode("pred30")
+                        displayModeRef.current = "pred30"
+                    }
+                    }
+                >
+                    Pred 30s
+                </button>
+
+                <button
+                    className={`p-2 rounded transition ${displayMode === "pred60" ? "bg-blue-600 text-white" : "bg-gray-600 text-white"}`}
+                    onClick={() => {
+                        setDisplayMode("pred60")
+                        displayModeRef.current = "pred60"
+                    }
+                    }
+                >
+                    Pred 60s
                 </button>
             </div>
 
@@ -999,7 +1367,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                 </button>
 
                 <button
-                className="p-2 bg-gray-700 text-white rounded hover:bg-gray-500 transition"
+                className="p-2 bg-blue-600 text-white rounded hover:bg-blue-800 transition"
                 onClick={() => setShowModal(true)}
                 >
                 View Simulations
@@ -1031,6 +1399,24 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                 </svg>
 
                 <div id="tooltip" className="tooltip" />
+                {/* <div
+                    id="mini-chart"
+                    ref={miniChartRef}
+                    style={{
+                        position: "absolute",
+                        visibility: "hidden",
+                        left: 0,
+                        top: 0,
+                        background: "rgba(0,0,0,0.75)",
+                        color: "white",
+                        padding: "8px 10px",
+                        borderRadius: 6,
+                        pointerEvents: "none",
+                        width: 260,
+                        height: 150,
+                    }}
+                    /> */}
+
 
                 {selectedRail && (
                     <button

@@ -11,9 +11,7 @@ import copy
 from queue import Queue
 import math
 from collections import deque
-
-import time
-random.seed(time.time())
+from predictor import Predictor
 
 
 def compress_data(data):
@@ -187,8 +185,8 @@ class edge():
         self.max_speed = max_speed
         self.OHTs = []  
         
-        self.count = 0  
-        self.avg_speed = max_speed
+        self.count = 0
+        self.last_saved_count = 0
         
         self._rt = None
         self.avg_speed = self.max_speed
@@ -564,6 +562,12 @@ class AMHS:
         self.queue = Queue()
         self.back_queue = Queue()
         
+        self.predictor = Predictor(
+                ckpt_full_path="checkpoints/model_ckpt.full.pt",
+                meta_pt_path="checkpoints/model_ckpt.pt",
+                layout_json_path="fab_oht_layout_cleaned.json"
+            )
+        
 
 
     def _create_graph(self):
@@ -740,6 +744,7 @@ class AMHS:
             if edge_key in edge_map:
                 edge = edge_map[edge_key]
                 edge.count = edge_info.get('count', 0)
+                edge.last_saved_count = edge.count
                 edge.avg_speed = edge_info.get('avg_speed', 0)
             
         for edge in self.edges:
@@ -747,7 +752,12 @@ class AMHS:
             carry_v = edge.avg_speed if edge.avg_speed > 0 else edge.max_speed
             edge._rt.seed_with(self.current_time, carry_v, n=1.0, fill=0.35)
             edge.avg_speed = carry_v
-    
+
+        if hasattr(self, "predictor"):
+            avg_arr = [edge.avg_speed for edge in self.edges]
+            cnt_arr = [edge.count for edge in self.edges]
+            self.predictor.reset_buffer_with_current(avg_arr, cnt_arr)
+            
     def generate_job(self):
         for _ in range(500):
             start_port = random.choice(self.ports)
@@ -894,6 +904,7 @@ class AMHS:
         self.stop_simulation_event.clear()
         
         count = 0
+        pred_dict = None
         
         if (isAccel):
             _current_time = 0
@@ -919,9 +930,16 @@ class AMHS:
                     oht.cal_pos(time_step*10)
 
                 if _current_time - last_saved_time > 10:
-                    edge_data = [(last_saved_time+10, edge.id, round(edge.avg_speed, 2)) for edge in self.edges]
+                    edge_data = [(last_saved_time+10, edge.id, round(edge.avg_speed, 2), edge.count - edge.last_saved_count) for edge in self.edges]
                     self.queue.put(edge_data)
                     last_saved_time += 10
+                    for e in self.edges:
+                        e.last_saved_count = e.count
+                        
+                    avg_arr = [e[2] for e in edge_data]  # round된 avg_speed
+                    cnt_arr = [e[3] for e in edge_data]  # count - last_saved_count
+
+                    pred_dict = self.predictor.step_and_predict_bin(avg_arr, cnt_arr)
                     
                 self.current_time = _current_time
 
@@ -952,9 +970,18 @@ class AMHS:
                 oht.cal_pos(time_step)
                 
             if current_time - last_saved_time > 10:
-                edge_data = [(last_saved_time+10, edge.id, round(edge.avg_speed, 2)) for edge in self.edges]
+                edge_data = [(last_saved_time+10, edge.id, round(edge.avg_speed, 2), edge.count - edge.last_saved_count) for edge in self.edges]
                 self.queue.put(edge_data)
                 last_saved_time += 10
+                for e in self.edges:
+                    e.last_saved_count = e.count
+                    
+                avg_arr = [e[2] for e in edge_data] 
+                cnt_arr = [e[3] for e in edge_data] 
+
+
+                pred_dict = self.predictor.step_and_predict_bin(avg_arr, cnt_arr)
+
                 
             if count % 5 == 0:
                 for oht in self.OHTs:
@@ -990,9 +1017,16 @@ class AMHS:
                     'oht_positions': oht_positions,
                     'edges': updated_edges
                 }
+                
+                if pred_dict is not None:
+                    payload['pred'] = pred_dict
+                    pred_dict = None
+
 
                 compressed_payload = compress_data(payload)
                 socketio.emit('updateOHT', {'data': compressed_payload}, to=sid)
+                
+
 
             current_time += time_step
             count += 1
@@ -1036,9 +1070,11 @@ class AMHS:
                 oht.cal_pos(time_step*10)
 
             if _current_time - last_saved_time > 10:
-                edge_data = [(last_saved_time+10, edge.id, round(edge.avg_speed, 2)) for edge in self.edges]
-                self.back_queue.put(edge_data)
+                edge_data = [(last_saved_time+10, edge.id, round(edge.avg_speed, 2), edge.count - edge.last_saved_count) for edge in self.edges]
+                self.queue.put(edge_data)
                 last_saved_time += 10
+                for e in self.edges:
+                    e.last_saved_count = e.count
                 
             self.current_time = _current_time
 
@@ -1065,9 +1101,11 @@ class AMHS:
                 oht.cal_pos(time_step)
                 
             if current_time - last_saved_time > 10:
-                edge_data = [(last_saved_time+10, edge.id, round(edge.avg_speed, 2)) for edge in self.edges]
-                self.back_queue.put(edge_data)
+                edge_data = [(last_saved_time+10, edge.id, round(edge.avg_speed, 2), edge.count - edge.last_saved_count) for edge in self.edges]
+                self.queue.put(edge_data)
                 last_saved_time += 10
+                for e in self.edges:
+                    e.last_saved_count = e.count
     
             current_time += time_step
             count += 1
@@ -1076,8 +1114,6 @@ class AMHS:
         print('Simulation ended')
         
         socketio.emit("backSimulationFinished", to=sid)
-
-        
         
         
         

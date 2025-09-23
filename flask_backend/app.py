@@ -13,7 +13,7 @@ import time
 import pandas as pd
 import io
 from config import DATABASE_URL
-from queue import Empty  
+from queue import Empty
 
 user_sessions = {}
 client_id_to_sid = {}
@@ -49,6 +49,7 @@ def create_simulation_table(simulation_id):
             time TEXT,
             edge_id TEXT,
             avg_speed FLOAT,
+            count INT,
             PRIMARY KEY (time, edge_id)
 
         );
@@ -88,9 +89,6 @@ def format_simulation_time(sim_time):
     hours, remainder = divmod(sim_time, 3600)
     minutes, seconds = divmod(remainder, 60)
     return f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}"
-
-
-
 
 app = Flask(__name__)
 CORS(app) 
@@ -197,6 +195,8 @@ def handle_delete_simulation_table(data):
         cur.close()
         conn.close()
 
+
+
 @socketio.on('uploadFiles')
 def handle_file_upload(data):
     sid = request.sid
@@ -271,16 +271,16 @@ def save_edge_data(sid):
                     edge_data = amhs.queue.get()
                     if edge_data:
                         batch.extend([
-                            (format_simulation_time(row[0]), row[1], row[2]) 
+                            (format_simulation_time(row[0]), row[1], row[2], row[3]) 
                             for row in edge_data
                         ])
                 
 
                 if batch:
                     cur.executemany(f"""
-                        INSERT INTO simulation_{current_simulation_id} (time, edge_id, avg_speed) 
-                        VALUES (%s, %s, %s)
-                        ON CONFLICT (time, edge_id) DO UPDATE SET avg_speed = EXCLUDED.avg_speed;
+                        INSERT INTO simulation_{current_simulation_id} (time, edge_id, avg_speed, count) 
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (time, edge_id) DO UPDATE SET avg_speed = EXCLUDED.avg_speed, count = EXCLUDED.count;
                     """, batch)
 
 
@@ -295,24 +295,24 @@ def save_edge_data(sid):
                 edge_data = amhs.queue.get()
                 if edge_data:
                     flush_batch.extend([
-                        (format_simulation_time(row[0]), row[1], row[2]) 
+                        (format_simulation_time(row[0]), row[1], row[2], row[3]) 
                         for row in edge_data
                     ])
 
                 if len(flush_batch) >= batch_size:
                     cur.executemany(f"""
-                        INSERT INTO simulation_{current_simulation_id} (time, edge_id, avg_speed) 
-                        VALUES (%s, %s, %s)
-                        ON CONFLICT (time, edge_id) DO UPDATE SET avg_speed = EXCLUDED.avg_speed;
+                        INSERT INTO simulation_{current_simulation_id} (time, edge_id, avg_speed, count) 
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (time, edge_id) DO UPDATE SET avg_speed = EXCLUDED.avg_speed, count = EXCLUDED.count;
                     """, flush_batch)
                     conn.commit()
                     flush_batch = []
 
             if flush_batch:
                 cur.executemany(f"""
-                    INSERT INTO simulation_{current_simulation_id} (time, edge_id, avg_speed) 
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (time, edge_id) DO UPDATE SET avg_speed = EXCLUDED.avg_speed;
+                    INSERT INTO simulation_{current_simulation_id} (time, edge_id, avg_speed, count) 
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (time, edge_id) DO UPDATE SET avg_speed = EXCLUDED.avg_speed, count = EXCLUDED.count;
                 """, flush_batch)
                 conn.commit()
 
@@ -355,15 +355,15 @@ def save_edge_data_back(sid):
                     edge_data = back_amhs.back_queue.get()
                     if edge_data:
                         batch.extend([
-                            (format_simulation_time(row[0]), row[1], row[2]) 
+                            (format_simulation_time(row[0]), row[1], row[2], row[3]) 
                             for row in edge_data
                         ])
                 
                 if batch:
                     cur.executemany(f"""
-                        INSERT INTO simulation_{back_simulation_id} (time, edge_id, avg_speed) 
-                        VALUES (%s, %s, %s)
-                        ON CONFLICT (time, edge_id) DO UPDATE SET avg_speed = EXCLUDED.avg_speed;
+                        INSERT INTO simulation_{back_simulation_id} (time, edge_id, avg_speed, count) 
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (time, edge_id) DO UPDATE SET avg_speed = EXCLUDED.avg_speed, count=EXCLUDED.count;
                     """, batch)
 
                 if time.time() - last_commit_time >= commit_interval:
@@ -377,15 +377,15 @@ def save_edge_data_back(sid):
                 edge_data = back_amhs.back_queue.get()
                 if edge_data:
                     flush_batch.extend([
-                        (format_simulation_time(row[0]), row[1], row[2]) 
+                        (format_simulation_time(row[0]), row[1], row[2], row[3]) 
                         for row in edge_data
                     ])
 
                 if len(flush_batch) >= batch_size:
                     cur.executemany(f"""
-                        INSERT INTO simulation_{back_simulation_id} (time, edge_id, avg_speed) 
-                        VALUES (%s, %s, %s)
-                        ON CONFLICT (time, edge_id) DO UPDATE SET avg_speed = EXCLUDED.avg_speed;
+                        INSERT INTO simulation_{back_simulation_id} (time, edge_id, avg_speed, count) 
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (time, edge_id) DO UPDATE SET avg_speed = EXCLUDED.avg_speed, count=EXCLUDED.count;
                     """, flush_batch)
                     conn.commit()
                     flush_batch = []
@@ -393,9 +393,9 @@ def save_edge_data_back(sid):
 
             if flush_batch:
                 cur.executemany(f"""
-                    INSERT INTO simulation_{back_simulation_id} (time, edge_id, avg_speed) 
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (time, edge_id) DO UPDATE SET avg_speed = EXCLUDED.avg_speed;
+                    INSERT INTO simulation_{back_simulation_id} (time, edge_id, avg_speed, count) 
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (time, edge_id) DO UPDATE SET avg_speed = EXCLUDED.avg_speed, count=EXCLUDED.count;
                 """, flush_batch)
                 conn.commit()
 
