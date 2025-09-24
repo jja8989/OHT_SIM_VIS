@@ -2,10 +2,6 @@ import React, { useEffect, useState } from 'react';
 import io from 'socket.io-client';
 import { getClientId } from '../utils/getClientId';
 
-
-
-
-
 const client_id = getClientId();
 
 
@@ -115,58 +111,10 @@ const Modal: React.FC<ModalProps> = ({ onClose }) => {
             });
 
             setLoading(false);
-
-
-            // const times = Object.keys(pivotMap).sort();
-
-            // const edgeHeaders = Array.from(allEdges).sort();
-            // const rows: any[] = [];
-
-            // for (const t of times) {
-            // const row = { time: t } as Record<string, any>;
-            // for (const e of edgeHeaders) {
-            //     // 없는 값은 빈칸 또는 null로
-            //     row[e] = pivotMap[t][e] ?? "";
-            // }
-            // rows.push(row);
-            // }
-
-            // setSimulationData(rows);
         
         });
     };
     
-    // const downloadCSV = () => {
-    //     if (!selectedTable || simulationData.length === 0) return;
-
-    //     const headerSet = new Set<string>(["time"]);
-    //     for (const r of simulationData) {
-    //         Object.keys(r).forEach((k) => headerSet.add(k));
-    //     }
-    //     headerSet.delete("time");
-    //     const headers = ["time", ...Array.from(headerSet).sort()];
-
-    //     const esc = (v: any) => {
-    //         if (v === null || v === undefined) return "";
-    //         const s = String(v);
-    //         return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-    //     };
-
-    //     const lines = [
-    //         headers.join(","),
-    //         ...simulationData.map((row) => headers.map((h) => esc(row[h])).join(",")),
-    //     ];
-
-    //     const csvContent = "data:text/csv;charset=utf-8," + lines.join("\n");
-    //     const encodedUri = encodeURI(csvContent);
-    //     const link = document.createElement("a");
-    //     link.setAttribute("href", encodedUri);
-    //     const timestamp = new Date().toISOString().replace(/[-:]/g, "").split(".")[0];
-    //     link.setAttribute("download", `${selectedTable}_${timestamp}.csv`);
-    //     document.body.appendChild(link);
-    //     link.click();
-    //     };
-
     const downloadCSV = (rows: any[], filename: string) => {
         if (!selectedTable || rows.length === 0) return;
 

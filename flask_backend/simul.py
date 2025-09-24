@@ -307,7 +307,7 @@ class OHT():
             self.acc = 0
             if len(self.path) != 0:
                 from_node = self.node_map[self.from_node]
-                # from_node.OHT = None
+
             return
 
 
@@ -505,7 +505,6 @@ class AMHS:
 
 
         for node in self.nodes:
-            # node.OHT = None
             self.node_map[node.id] = node
             
         self.edges = copy.deepcopy(edges)
@@ -606,7 +605,6 @@ class AMHS:
                 edge_map = self.edge_map,
                 port_map = self.port_map
             )
-            # start_node.OHT = oht
             self.OHTs.append(oht)
             
     def set_initial_OHTs(self, oht_list):
@@ -625,7 +623,6 @@ class AMHS:
                 edge_map = self.edge_map,
                 port_map = self.port_map
             )
-            # start_node.OHT = oht
             self.OHTs.append(oht)
             i = i+1
     
@@ -813,7 +810,6 @@ class AMHS:
         if oht.path:
             if not oht.edge:
                 oht.edge = oht.path.pop(0)
-                # self.node_map[oht.from_node].OHT = None
                 if oht not in self.edge_map[oht.edge].OHTs:
                     self.edge_map[oht.edge].OHTs.append(oht)
                             
@@ -936,8 +932,8 @@ class AMHS:
                     for e in self.edges:
                         e.last_saved_count = e.count
                         
-                    avg_arr = [e[2] for e in edge_data]  # round된 avg_speed
-                    cnt_arr = [e[3] for e in edge_data]  # count - last_saved_count
+                    avg_arr = [e[2] for e in edge_data]  
+                    cnt_arr = [e[3] for e in edge_data]  
 
                     pred_dict = self.predictor.step_and_predict_bin(avg_arr, cnt_arr)
                     
