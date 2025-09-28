@@ -918,12 +918,12 @@ class AMHS:
                 self.assign_jobs()
                 
                 for oht in self.OHTs:
-                    oht.move(time_step*10, _current_time)
+                    oht.move(time_step, _current_time)
 
                 self.update_edge_metrics(_current_time, time_window=60)
                 
                 for oht in self.OHTs:
-                    oht.cal_pos(time_step*10)
+                    oht.cal_pos(time_step)
 
                 if _current_time - last_saved_time > 10:
                     edge_data = [(last_saved_time+10, edge.id, round(edge.avg_speed, 2), edge.count - edge.last_saved_count) for edge in self.edges]
@@ -939,7 +939,7 @@ class AMHS:
                     
                 self.current_time = _current_time
 
-                _current_time += time_step*10
+                _current_time += time_step
                 count += 1
             
         

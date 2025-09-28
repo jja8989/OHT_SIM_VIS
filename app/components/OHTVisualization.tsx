@@ -65,6 +65,7 @@ interface OHTVisualizationProps {
 interface EdgeQueueItem {
   updates: any[];
   pred?: Record<string, number[]>; 
+}
 
 
 const decompressData = (compressedData: string) => {
@@ -1241,7 +1242,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                         displayModeRef.current = "count"
                     }}
                 >
-                    Show Count
+                    Count
                 </button>
 
                 <button
@@ -1252,7 +1253,7 @@ const OHTVisualization: React.FC<OHTVisualizationProps> = ({ data }) => {
                     }
                     }
                 >
-                    Show Avg Speed
+                    Avg Speed
                 </button>
 
                 <button
