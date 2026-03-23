@@ -19,8 +19,8 @@ Before starting, make sure you have **Docker** and **Docker Compose** installed.
 
 ### **2️⃣ Clone the Repository**
 ```sh
-git clone <repository-url>
-cd <project-directory>
+git clone https://github.com/jja8989/OHT_SIM_VIS/
+cd OHT_SIM_VIS
 ```
 
 ### **3️⃣ Start the System**
