@@ -34,13 +34,21 @@ interface LayoutData {
     ports: Port[];
 }
 
-const socket = io(process.env.NEXT_PUBLIC_SOCKET_URL || '/', {
+// const socket = io(process.env.NEXT_PUBLIC_SOCKET_URL || '/', {
+//     path: '/socket.io',
+//     transports: ['websocket'],
+//     query: {
+//         client_id: client_id,
+//       }
+//   });
+
+const socket = io('/', {
     path: '/socket.io',
-    transports: ['websocket'],
+    transports: ['polling', 'websocket'],
     query: {
-        client_id: client_id,
-      }
-  });
+        client_id,
+    },
+});
 
 
 export default function Home() {

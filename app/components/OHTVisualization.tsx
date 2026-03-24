@@ -11,13 +11,11 @@ import TimeInput from "./TimeInput";
 const client_id = getClientId();
 
 
-const socket = io(process.env.NEXT_PUBLIC_SOCKET_URL || '/', {
+const socket = io('/', {
     path: '/socket.io',
-    transports: ['websocket'],
-    query: {
-        client_id: client_id,
-      }
-  });
+    transports: ['polling', 'websocket'],
+    query: { client_id },
+});
 
 interface Node {
     id: string;
