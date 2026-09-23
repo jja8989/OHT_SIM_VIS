@@ -14,6 +14,7 @@ import pandas as pd
 import io
 from config import DATABASE_URL
 from queue import Empty
+import os
 
 user_sessions = {}
 client_id_to_sid = {}
@@ -598,5 +599,16 @@ def on_connect():
         user_sessions[sid] = client_id_to_sid[client_id]
 
 
+# if __name__ == '__main__':
+#     socketio.run(app, host="0.0.0.0", port=5000, debug=True, allow_unsafe_werkzeug=True)
+
 if __name__ == '__main__':
-    socketio.run(app, host="0.0.0.0", port=5000, debug=True, allow_unsafe_werkzeug=True)
+    port = int(os.environ.get("PORT", 5000))
+
+    socketio.run(
+        app,
+        host="0.0.0.0",
+        port=port,
+        debug=False,
+        allow_unsafe_werkzeug=True
+    )
