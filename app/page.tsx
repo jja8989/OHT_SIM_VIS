@@ -44,7 +44,7 @@ interface LayoutData {
 
 const socket = io('/', {
     path: '/socket.io',
-    transports: ['polling', 'websocket'],
+    transports: ['websocket'],
     query: {
         client_id,
     },
