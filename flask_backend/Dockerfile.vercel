@@ -16,6 +16,18 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+RUN python - <<'PY'
+from pathlib import Path
+p = Path('app.py')
+s = p.read_text()
+old = 'socketio = SocketIO(app, cors_allowed_origins="*")'
+new = 'socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")'
+if old in s:
+    p.write_text(s.replace(old, new, 1))
+elif new not in s:
+    raise SystemExit('Expected SocketIO initialization was not found')
+PY
+
 ENV PYTHONUNBUFFERED=1
 
 CMD ["python", "app.py"]
